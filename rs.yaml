@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: whereabouts-test
+  labels:
+    app: whereabouts-test
+    tier: whereabouts-test
+spec:
+  # modify replicas according to your case
+  replicas: 3
+  selector:
+    matchLabels:
+      tier: whereabouts-test
+  template:
+    metadata:
+      labels:
+        tier: whereabouts-test
+      annotations:
+        k8s.v1.cni.cncf.io/networks: macvlan-conf
+    spec:
+      containers:
+      - name: samplepod
+        command: ["/bin/ash", "-c", "trap : TERM INT; sleep infinity & wait"]
+        image: alpine

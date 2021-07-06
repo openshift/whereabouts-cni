@@ -40,9 +40,9 @@ type OverlappingRangeStore interface {
 }
 
 // IPManagement manages ip allocation and deallocation from a storage perspective
-func IPManagement(mode int, ipamConf types.IPAMConfig, containerID string) (net.IPNet, error) {
+func IPManagement(mode int, ipamConf types.IPAMConfig, containerID string, podRef string) (net.IPNet, error) {
 
-	logging.Debugf("IPManagement -- mode: %v / host: %v / containerID: %v", mode, ipamConf.EtcdHost, containerID)
+	logging.Debugf("IPManagement -- mode: %v / host: %v / containerID: %v / podRef: %v", mode, ipamConf.EtcdHost, containerID, podRef)
 
 	var newip net.IPNet
 	// Skip invalid modes
@@ -109,7 +109,7 @@ RETRYLOOP:
 		var updatedreservelist []types.IPReservation
 		switch mode {
 		case types.Allocate:
-			newip, updatedreservelist, err = allocate.AssignIP(ipamConf, reservelist, containerID)
+			newip, updatedreservelist, err = allocate.AssignIP(ipamConf, reservelist, containerID, podRef)
 			if err != nil {
 				logging.Errorf("Error assigning IP: %v", err)
 				return newip, err

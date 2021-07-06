@@ -21,12 +21,12 @@ func (a AssignmentError) Error() string {
 }
 
 // AssignIP assigns an IP using a range and a reserve list.
-func AssignIP(ipamConf types.IPAMConfig, reservelist []types.IPReservation, containerID string) (net.IPNet, []types.IPReservation, error) {
+func AssignIP(ipamConf types.IPAMConfig, reservelist []types.IPReservation, containerID string, podRef string) (net.IPNet, []types.IPReservation, error) {
 
 	// Setup the basics here.
 	_, ipnet, _ := net.ParseCIDR(ipamConf.Range)
 
-	newip, updatedreservelist, err := IterateForAssignment(*ipnet, ipamConf.RangeStart, ipamConf.RangeEnd, reservelist, ipamConf.OmitRanges, containerID)
+	newip, updatedreservelist, err := IterateForAssignment(*ipnet, ipamConf.RangeStart, ipamConf.RangeEnd, reservelist, ipamConf.OmitRanges, containerID, podRef)
 	if err != nil {
 		return net.IPNet{}, nil, err
 	}
@@ -174,11 +174,11 @@ func IPAddOffset(ip net.IP, offset uint64) net.IP {
 }
 
 // IterateForAssignment iterates given an IP/IPNet and a list of reserved IPs
-func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reservelist []types.IPReservation, excludeRanges []string, containerID string) (net.IP, []types.IPReservation, error) {
-	firstip := rangeStart
+func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reservelist []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
+	firstip := rangeStart.To16()
 	var lastip net.IP
 	if rangeEnd != nil {
-		lastip = rangeEnd
+		lastip = rangeEnd.To16()
 	} else {
 		var err error
 		firstip, lastip, err = GetIPRange(rangeStart, ipnet)
@@ -227,7 +227,7 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 
 		assignedip = i
 		logging.Debugf("Reserving IP: |%v|", assignedip.String()+" "+containerID)
-		reservelist = append(reservelist, types.IPReservation{IP: assignedip, ContainerID: containerID})
+		reservelist = append(reservelist, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
 		break
 	}
 
@@ -281,8 +281,10 @@ func GetIPRange(ip net.IP, ipnet net.IPNet) (net.IP, net.IP, error) {
 		last[len(last)-1]--
 	}
 	// get first ip and last ip based on network part + host part
-	firstIP, _ := mergeIPAddress([]byte(network), first)
-	lastIP, _ := mergeIPAddress([]byte(network), last)
+	firstIPbyte, _ := mergeIPAddress([]byte(network), first)
+	lastIPbyte, _ := mergeIPAddress([]byte(network), last)
+	firstIP := net.IP(firstIPbyte).To16()
+	lastIP := net.IP(lastIPbyte).To16()
 
 	return firstIP, lastIP, nil
 }

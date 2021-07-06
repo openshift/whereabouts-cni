@@ -73,6 +73,7 @@ type IPReservation struct {
 	IP          net.IP `json:"ip"`
 	ContainerID string `json:"id"`
 	IsAllocated bool
+	PodRef      string `json:"podref,omitempty"`
 }
 
 const (
