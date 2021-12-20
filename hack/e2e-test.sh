@@ -68,7 +68,7 @@ wait_until_all_pods() {
   local pod_phases
   while [[ $timeout -gt 0 ]]; do
     all_running=true
-    pod_phases="$(kubectl get pods --namespace $namespace --output jsonpath="{range .items[*]}{.status.phase}{' '}{end}")"
+    pod_phases="$(kubectl get pods --namespace $namespace --selector $WB_LABEL_EQUAL --output jsonpath="{range .items[*]}{.status.phase}{' '}{end}")"
     for phase in $pod_phases; do
       if [[ $phase != "Running" ]] && [[ $phase != "Succeeded" ]]; then
         all_running=false
@@ -89,7 +89,7 @@ wait_until_all_pods_terminated() {
   local namespace="$1"
   local timeout=${TIMEOUT:-300}
   while [[ $timeout -gt 0 ]]; do
-    if ! kubectl get pods --namespace $namespace | grep Terminating >/dev/null; then
+    if ! kubectl get pods --namespace $namespace --selector $WB_LABEL_EQUAL | grep Terminating >/dev/null; then
       return 0
     fi
     sleep 1
@@ -160,18 +160,23 @@ metadata:
 spec:
   config: '{
       "cniVersion": "0.3.0",
-      "type": "macvlan",
-      "master": "$TEST_INTERFACE_NAME",
-      "mode": "bridge",
-      "ipam": {
-        "type": "whereabouts",
-        "leader_lease_duration": $LEADER_LEASE_DURATION,
-        "leader_renew_deadline": $LEADER_RENEW_DEADLINE,
-        "leader_retry_period": $LEADER_RETRY_PERIOD,
-        "range": "$1",
-        "log_level": "debug",
-        "log_file": "/tmp/wb"
-      }
+      "disableCheck": true,
+      "plugins": [
+          {
+              "type": "macvlan",
+              "master": "$TEST_INTERFACE_NAME",
+              "mode": "bridge",
+              "ipam": {
+                  "type": "whereabouts",
+                  "leader_lease_duration": $LEADER_LEASE_DURATION,
+                  "leader_renew_deadline": $LEADER_RENEW_DEADLINE,
+                  "leader_retry_period": $LEADER_RETRY_PERIOD,
+                  "range": "$1",
+                  "log_level": "debug",
+                  "log_file": "/tmp/wb"
+              }
+          }
+      ]
     }'
 EOF
 }
@@ -202,6 +207,10 @@ is_ippool_consistent() {
   local pod_ips
   local resolved_ippool_ip
   local exit_code=0
+
+  echo "Forcing reconciliation of the cluster ..."
+  bin/ip-reconciler -kubeconfig="${HOME}"/.kube/config
+
   ippool_keys=($(kubectl get ippool $pool_name --namespace $pool_namespace --output json \
     | jq --raw-output '.spec.allocations|to_entries |map("\(.key)")| .[]'))
   ips=($(nmap -sL -n $range | awk '/Nmap scan report for/{printf "%s ", $NF}'))
@@ -210,6 +219,11 @@ is_ippool_consistent() {
     | jq --compact-output '.[] | select(.name == "default/network1") | .ips[0]' | tr --delete '"'))
 
   echo "#### found '${#ippool_keys[@]}' IP pool ids in '$pool_name' and '${#pod_ips[@]}' pod IPs"
+
+  if [[ ${#ippool_keys[@]} -ne ${#pod_ips[@]} ]]; then
+    echo "#### number of IP pools IPs does not equal number of whereabouts assigned pods IPs"
+    exit_code=4
+  fi
 
   for ippool_key in ${ippool_keys[@]}; do
     resolved_ippool_ip="${ips[$ippool_key]}"
