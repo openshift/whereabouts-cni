@@ -14,11 +14,11 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
-	"github.com/dougbtv/whereabouts/pkg/allocate"
-	whereaboutsv1alpha1 "github.com/dougbtv/whereabouts/pkg/api/v1alpha1"
-	"github.com/dougbtv/whereabouts/pkg/logging"
-	"github.com/dougbtv/whereabouts/pkg/storage"
-	whereaboutstypes "github.com/dougbtv/whereabouts/pkg/types"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/allocate"
+	whereaboutsv1alpha1 "github.com/k8snetworkplumbingwg/whereabouts/pkg/api/v1alpha1"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/storage"
+	whereaboutstypes "github.com/k8snetworkplumbingwg/whereabouts/pkg/types"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,7 +38,7 @@ func NewKubernetesIPAM(containerID string, ipamConf whereaboutstypes.IPAMConfig)
 		return nil, fmt.Errorf("k8s config: namespace not present in context")
 	}
 
-	kubernetesClient, err := NewClient(ipamConf.Kubernetes.KubeConfigPath)
+	kubernetesClient, err := NewClientViaKubeconfig(ipamConf.Kubernetes.KubeConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed instantiating kubernetes client: %v", err)
 	}
@@ -309,10 +309,10 @@ func newLeaderElector(clientset *kubernetes.Clientset, namespace string, podName
 	// Make the leader elector, ready to be used in the Workgroup.
 	// !bang
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock:          rl,
-		LeaseDuration: time.Duration(leaseDuration) * time.Millisecond,
-		RenewDeadline: time.Duration(renewDeadline) * time.Millisecond,
-		RetryPeriod:   time.Duration(retryPeriod) * time.Millisecond,
+		Lock:            rl,
+		LeaseDuration:   time.Duration(leaseDuration) * time.Millisecond,
+		RenewDeadline:   time.Duration(renewDeadline) * time.Millisecond,
+		RetryPeriod:     time.Duration(retryPeriod) * time.Millisecond,
 		ReleaseOnCancel: true,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(_ context.Context) {
@@ -499,6 +499,11 @@ RETRYLOOP:
 			if rl.IsAllocated != true {
 				usereservelist = append(usereservelist, rl)
 			}
+		}
+
+		// Manual race condition testing
+		if ipamConf.SleepForRace > 0 {
+			time.Sleep(time.Duration(ipamConf.SleepForRace) * time.Second)
 		}
 
 		err = pool.Update(requestCtx, usereservelist)
