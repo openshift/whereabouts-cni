@@ -17,7 +17,7 @@ ENV GO111MODULE=on
 RUN go build -mod vendor -o bin/whereabouts cmd/whereabouts.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/4.7:base
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-base-openshift-4.7
 RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel7/bin && \
