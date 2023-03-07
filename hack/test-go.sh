@@ -11,7 +11,7 @@ ${GO} vet --tags=test ./cmd/... ./pkg/...
 BASEDIR=$(pwd)
 
 echo "Installing golang staticcheck ..."
-GOBIN=${BASEDIR}/bin go install honnef.co/go/tools/cmd/staticcheck@latest
+GOBIN=${BASEDIR}/bin go install honnef.co/go/tools/cmd/staticcheck@v0.3.3
 
 echo "Running golang staticcheck ..."
 ${BASEDIR}/bin/staticcheck --tags=test ./...
