@@ -17,15 +17,20 @@ CNI_CONF_DIR=${CNI_CONF_DIR:-"/host/etc/cni/net.d"}
 # Make a whereabouts.d directory (for our kubeconfig)
 
 mkdir -p $CNI_CONF_DIR/whereabouts.d
+WHEREABOUTS_TEMP_KUBECONFIG="/tmp/multus.kubeconfig"
 WHEREABOUTS_KUBECONFIG=$CNI_CONF_DIR/whereabouts.d/whereabouts.kubeconfig
 WHEREABOUTS_FLATFILE=$CNI_CONF_DIR/whereabouts.d/whereabouts.conf
 WHEREABOUTS_KUBECONFIG_LITERAL=$(echo "$WHEREABOUTS_KUBECONFIG" | sed -e s'|/host||')
 
 # ------------------------------- Generate a "kube-config"
 SERVICE_ACCOUNT_PATH=/var/run/secrets/kubernetes.io/serviceaccount
+SERVICE_ACCOUNT_TOKEN_PATH=$SERVICE_ACCOUNT_PATH/token
 KUBE_CA_FILE=${KUBE_CA_FILE:-$SERVICE_ACCOUNT_PATH/ca.crt}
-SERVICEACCOUNT_TOKEN=$(cat $SERVICE_ACCOUNT_PATH/token)
+SERVICEACCOUNT_TOKEN=$(cat $SERVICE_ACCOUNT_TOKEN_PATH)
 SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-false}
+
+LAST_SERVICEACCOUNT_MD5SUM=""
+LAST_KUBE_CA_FILE_MD5SUM=""
 
 # Setup our logging routines
 
@@ -44,37 +49,40 @@ function warn()
     log "WARN: {$1}"
 }
 
+function generateKubeConfig {
+  # Check if we're running as a k8s pod.
+  if [ -f "$SERVICE_ACCOUNT_PATH/token" ]; then
+    # We're running as a k8d pod - expect some variables.
+    if [ -z ${KUBERNETES_SERVICE_HOST} ]; then
+      error "KUBERNETES_SERVICE_HOST not set"; exit 1;
+    fi
+    if [ -z ${KUBERNETES_SERVICE_PORT} ]; then
+      error "KUBERNETES_SERVICE_PORT not set"; exit 1;
+    fi
 
-# Check if we're running as a k8s pod.
-if [ -f "$SERVICE_ACCOUNT_PATH/token" ]; then
-  # We're running as a k8d pod - expect some variables.
-  if [ -z ${KUBERNETES_SERVICE_HOST} ]; then
-    error "KUBERNETES_SERVICE_HOST not set"; exit 1;
-  fi
-  if [ -z ${KUBERNETES_SERVICE_PORT} ]; then
-    error "KUBERNETES_SERVICE_PORT not set"; exit 1;
-  fi
+    if [ "$SKIP_TLS_VERIFY" == "true" ]; then
+      TLS_CFG="insecure-skip-tls-verify: true"
+    elif [ -f "$KUBE_CA_FILE" ]; then
+      TLS_CFG="certificate-authority-data: $(cat $KUBE_CA_FILE | base64 | tr -d '\n')"
+    fi
 
-  if [ "$SKIP_TLS_VERIFY" == "true" ]; then
-    TLS_CFG="insecure-skip-tls-verify: true"
-  elif [ -f "$KUBE_CA_FILE" ]; then
-    TLS_CFG="certificate-authority-data: $(cat $KUBE_CA_FILE | base64 | tr -d '\n')"
-  fi
+    # Kubernetes service address must be wrapped if it is IPv6 address
+    KUBERNETES_SERVICE_HOST_WRAP=$KUBERNETES_SERVICE_HOST
+    if [ "$KUBERNETES_SERVICE_HOST_WRAP" != "${KUBERNETES_SERVICE_HOST_WRAP#*:[0-9a-fA-F]}" ]; then
+      KUBERNETES_SERVICE_HOST_WRAP=\[$KUBERNETES_SERVICE_HOST_WRAP\]
+    fi
 
-  # Kubernetes service address must be wrapped if it is IPv6 address
-  KUBERNETES_SERVICE_HOST_WRAP=$KUBERNETES_SERVICE_HOST
-  if [ "$KUBERNETES_SERVICE_HOST_WRAP" != "${KUBERNETES_SERVICE_HOST_WRAP#*:[0-9a-fA-F]}" ]; then
-    KUBERNETES_SERVICE_HOST_WRAP=\[$KUBERNETES_SERVICE_HOST_WRAP\]
-  fi
-
-  # Write a kubeconfig file for the CNI plugin.  Do this
-  # to skip TLS verification for now.  We should eventually support
-  # writing more complete kubeconfig files. This is only used
-  # if the provided CNI network config references it.
-  touch $WHEREABOUTS_KUBECONFIG
-  chmod ${KUBECONFIG_MODE:-600} $WHEREABOUTS_KUBECONFIG
-  cat > $WHEREABOUTS_KUBECONFIG <<EOF
-# Kubeconfig file for Multus CNI plugin.
+    # Write a kubeconfig file for the CNI plugin.  Do this
+    # to skip TLS verification for now.  We should eventually support
+    # writing more complete kubeconfig files. This is only used
+    # if the provided CNI network config references it.
+    touch $WHEREABOUTS_TEMP_KUBECONFIG
+    chmod ${KUBECONFIG_MODE:-600} $WHEREABOUTS_TEMP_KUBECONFIG
+    # Write the kubeconfig to a temp file first.
+    timenow=$(date)
+    cat > $WHEREABOUTS_TEMP_KUBECONFIG <<EOF
+# Kubeconfig file for Whereabouts CNI plugin.
+# Generated at ${timenow}
 apiVersion: v1
 kind: Config
 clusters:
@@ -95,9 +103,16 @@ contexts:
 current-context: whereabouts-context
 EOF
 
-  touch $WHEREABOUTS_FLATFILE
-  chmod ${KUBECONFIG_MODE:-600} $WHEREABOUTS_FLATFILE
-  cat > $WHEREABOUTS_FLATFILE <<EOF
+    # Atomically move the temp kubeconfig to its permanent home.
+    mv -f $WHEREABOUTS_TEMP_KUBECONFIG $WHEREABOUTS_KUBECONFIG
+
+    # Keep track of the md5sum
+    LAST_SERVICEACCOUNT_MD5SUM=$(md5sum $SERVICE_ACCOUNT_TOKEN_PATH | awk '{print $1}')
+    LAST_KUBE_CA_FILE_MD5SUM=$(md5sum $KUBE_CA_FILE | awk '{print $1}')
+
+    touch $WHEREABOUTS_FLATFILE
+    chmod ${KUBECONFIG_MODE:-600} $WHEREABOUTS_FLATFILE
+    cat > $WHEREABOUTS_FLATFILE <<EOF
 {
   "datastore": "kubernetes",
   "kubernetes": {
@@ -107,19 +122,31 @@ EOF
 }
 EOF
 
-else
-  warn "Doesn't look like we're running in a kubernetes environment (no serviceaccount token)"
-fi
+  else
+    warn "Doesn't look like we're running in a kubernetes environment (no serviceaccount token)"
+  fi
 
-# copy whereabouts to the cni bin dir
-cp -f /whereabouts $CNI_BIN_DIR
+  # copy whereabouts to the cni bin dir
+  cp -f /whereabouts $CNI_BIN_DIR
 
 # ---------------------- end Generate a "kube-config".
+
+}
+
+generateKubeConfig
 
 # Unless told otherwise, sleep forever.
 # This prevents Kubernetes from restarting the pod repeatedly.
 should_sleep=${SLEEP:-"true"}
 echo "Done configuring CNI.  Sleep=$should_sleep"
 while [ "$should_sleep" == "true"  ]; do
-    sleep 1000000000000
+    # Check the md5sum of the service account token and ca.
+    svcaccountsum=$(md5sum $SERVICE_ACCOUNT_TOKEN_PATH | awk '{print $1}')
+    casum=$(md5sum $KUBE_CA_FILE | awk '{print $1}')
+    if [ "$svcaccountsum" != "$LAST_SERVICEACCOUNT_MD5SUM" ] || [ "$casum" != "$LAST_KUBE_CA_FILE_MD5SUM" ]; then
+      # log "Detected service account or CA file change, regenerating kubeconfig..."
+      generateKubeConfig
+    fi
+    
+    sleep 1
 done
