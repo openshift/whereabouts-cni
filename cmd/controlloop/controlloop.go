@@ -59,6 +59,8 @@ func main() {
 	defer close(errorChan)
 	handleSignals(stopChan, os.Interrupt)
 
+	logging.Verbosef("akaris: main()")
+
 	networkController, err := newPodController(stopChan)
 	if err != nil {
 		_ = logging.Errorf("could not create the pod networks controller: %v", err)

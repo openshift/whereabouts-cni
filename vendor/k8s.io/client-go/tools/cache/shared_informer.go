@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -267,6 +268,7 @@ func WaitForNamedCacheSync(controllerName string, stopCh <-chan struct{}, cacheS
 // if the controller should shutdown
 // callers should prefer WaitForNamedCacheSync()
 func WaitForCacheSync(stopCh <-chan struct{}, cacheSyncs ...InformerSynced) bool {
+	logging.Verbosef("akaris: WaitForCacheSync()")
 	err := wait.PollImmediateUntil(syncedPollPeriod,
 		func() (bool, error) {
 			for _, syncFunc := range cacheSyncs {
@@ -279,10 +281,12 @@ func WaitForCacheSync(stopCh <-chan struct{}, cacheSyncs ...InformerSynced) bool
 		stopCh)
 	if err != nil {
 		klog.V(2).Infof("stop requested")
+		logging.Verbosef("akaris: WaitForCacheSync() done, false")
 		return false
 	}
 
 	klog.V(4).Infof("caches populated")
+	logging.Verbosef("akaris: WaitForCacheSync() done, true")
 	return true
 }
 

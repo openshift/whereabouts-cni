@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"k8s.io/client-go/kubernetes"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"k8s.io/client-go/kubernetes"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -115,6 +116,7 @@ func newPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.I
 // Start runs worker thread after performing cache synchronization
 func (pc *PodController) Start(stopChan <-chan struct{}) {
 	logging.Verbosef("starting network controller")
+	logging.Verbosef("akaris: Start()")
 
 	if ok := cache.WaitForCacheSync(stopChan, pc.arePodsSynched, pc.areNetAttachDefsSynched, pc.areIPPoolsSynched); !ok {
 		logging.Verbosef("failed waiting for caches to sync")
@@ -129,18 +131,22 @@ func (pc *PodController) Shutdown() {
 }
 
 func (pc *PodController) worker() {
+	logging.Verbosef("akaris: worker()")
 	for pc.processNextWorkItem() {
 	}
 }
 
 func (pc *PodController) processNextWorkItem() bool {
+	logging.Verbosef("akaris: processNextWorkItem()")
 	queueItem, shouldQuit := pc.workqueue.Get()
+	logging.Verbosef("akaris: processNextWorkItem(): queueItem: %v; shouldQuit: %v", queueItem, shouldQuit)
 	if shouldQuit {
 		return false
 	}
 	defer pc.workqueue.Done(queueItem)
 
 	pod := queueItem.(*v1.Pod)
+	logging.Verbosef("akaris: processNextWorkItem(): pod: %v", pod)
 	err := pc.garbageCollectPodIPs(pod)
 	logging.Verbosef("result of garbage collecting pods: %+v", err)
 	pc.handleResult(pod, err)
@@ -149,15 +155,18 @@ func (pc *PodController) processNextWorkItem() bool {
 }
 
 func (pc *PodController) garbageCollectPodIPs(pod *v1.Pod) error {
+	logging.Verbosef("akaris: garbageCollectPodIPs(%v)", *pod)
 	podNamespace := pod.GetNamespace()
 	podName := pod.GetName()
 
 	ifaceStatuses, err := podNetworkStatus(pod)
+	logging.Verbosef("akaris: processNextWorkItem(): ifaceStatuses: %v, err: %v", ifaceStatuses, err)
 	if err != nil {
 		return fmt.Errorf("failed to access the network status for pod [%s/%s]: %v", podName, podNamespace, err)
 	}
 
 	for _, ifaceStatus := range ifaceStatuses {
+		logging.Verbosef("akaris: processNextWorkItem(): in for loop: ifaceStatus: %v", ifaceStatus)
 		if ifaceStatus.Default {
 			logging.Verbosef("skipped net-attach-def for default network")
 			continue
@@ -336,6 +345,7 @@ func podID(podNamespace string, podName string) string {
 func podNetworkStatus(pod *v1.Pod) ([]nadv1.NetworkStatus, error) {
 	var ifaceStatuses []nadv1.NetworkStatus
 	networkStatus, found := pod.Annotations[nadv1.NetworkStatusAnnot]
+	logging.Verbosef("akaris: podNetworkStatus(): networkStatus: %v, found: %v", networkStatus, found)
 	if found {
 		if err := json.Unmarshal([]byte(networkStatus), &ifaceStatuses); err != nil {
 			return nil, err
