@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -58,7 +57,7 @@ func AllocateAndReleaseAddressesTest(ipVersion string, ipamConf *whereaboutstype
 	Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 	wbClient := *kubernetes.NewKubernetesClient(
 		fake.NewSimpleClientset(
-			ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+			ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)),
 		fakek8sclient.NewSimpleClientset(),
 		0)
 	for i := 0; i < len(expectedAddresses); i++ {
@@ -124,7 +123,7 @@ func AllocateAndReleaseAddressesTest(ipVersion string, ipamConf *whereaboutstype
 				ipamConf,
 				fakek8sclient.NewSimpleClientset(),
 				fake.NewSimpleClientset(
-					ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+					ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 			return cmdDel(args, client)
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -145,7 +144,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 	BeforeEach(func() {
 		var err error
-		tmpDir, err = ioutil.TempDir("/tmp", "whereabouts")
+		tmpDir, err = os.MkdirTemp("/tmp", "whereabouts")
 		Expect(err).ToNot(HaveOccurred())
 		kubeConfigPath = fmt.Sprintf("%s/%s", tmpDir, whereaboutsConfigFile)
 		Expect(os.WriteFile(kubeConfigPath, kubeconfig(), fs.ModePerm)).To(Succeed())
@@ -234,6 +233,30 @@ var _ = Describe("Whereabouts operations", func() {
 		)
 	})
 
+	It("allocates and releases an IPv6 range that ends with zeroes with a Kubernetes backend", func() {
+
+		ipVersion := "6"
+		ipRange := "2001:db8:480:603d:0304:0403:000:0000-2001:db8:480:603d:0304:0403:0000:0004/64"
+		ipGateway := "2001:db8:480:603d::1"
+		expectedAddress := "2001:db8:480:603d:0304:0403:000:0000/64"
+
+		AllocateAndReleaseAddressesTest(
+			ipVersion,
+			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
+			[]string{expectedAddress},
+		)
+
+		ipRange = "2001:db8:5422:0005::-2001:db8:5422:0005:7fff:ffff:ffff:ffff/64"
+		ipGateway = "2001:db8:5422:0005::1"
+		expectedAddress = "2001:db8:5422:0005::/64"
+
+		AllocateAndReleaseAddressesTest(
+			ipVersion,
+			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
+			[]string{expectedAddress},
+		)
+	})
+
 	It("allocates IPv6 addresses with DNS-1123 conformant naming with a Kubernetes backend", func() {
 
 		ipVersion := "6"
@@ -292,7 +315,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -364,7 +387,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -433,7 +456,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -513,7 +536,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -602,7 +625,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -666,8 +689,8 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace),
-				ipPool(ipamConf.IPRanges[1].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName),
+				ipPool(ipamConf.IPRanges[1].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -731,8 +754,8 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace),
-				ipPool(ipamConf.IPRanges[1].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName),
+				ipPool(ipamConf.IPRanges[1].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -794,7 +817,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -860,7 +883,7 @@ var _ = Describe("Whereabouts operations", func() {
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)))
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
@@ -916,7 +939,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		wbClient := *kubernetes.NewKubernetesClient(
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)),
 			fakek8sclient.NewSimpleClientset(),
 			0)
 
@@ -1013,7 +1036,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		wbClient := *kubernetes.NewKubernetesClient(
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)),
 			fakek8sclient.NewSimpleClientset(),
 			0)
 
@@ -1131,7 +1154,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		wbClient := *kubernetes.NewKubernetesClient(
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)),
 			fakek8sclient.NewSimpleClientset(),
 			0)
 
@@ -1250,7 +1273,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		wbClient := *kubernetes.NewKubernetesClient(
 			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, ipamConf.NetworkName)),
 			fakek8sclient.NewSimpleClientset(),
 			0)
 
@@ -1429,10 +1452,10 @@ users:
 `)
 }
 
-func ipPool(ipRange string, namespace string, podReferences ...string) *v1alpha1.IPPool {
+func ipPool(ipRange string, namespace string, networkName string, podReferences ...string) *v1alpha1.IPPool {
 	return &v1alpha1.IPPool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            kubernetes.NormalizeRange(ipRange),
+			Name:            kubernetes.IPPoolName(kubernetes.PoolIdentifier{IpRange: ipRange, NetworkName: networkName}),
 			Namespace:       namespace,
 			ResourceVersion: "1",
 		},
