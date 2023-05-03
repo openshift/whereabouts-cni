@@ -47,6 +47,28 @@ rules:
   - pods
   verbs:
   - list
+  - watch
+- apiGroups: [""]
+  resources:
+  - nodes
+  verbs:
+  - get
+- apiGroups: ["k8s.cni.cncf.io"]
+  resources:
+    - network-attachment-definitions
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+    - events
+  verbs:
+  - create
+  - patch
+  - update
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -72,14 +94,25 @@ spec:
       hostNetwork: true      
       serviceAccountName: whereabouts
       nodeSelector:
-        beta.kubernetes.io/arch: amd64
+        kubernetes.io/arch: amd64
       tolerations:
       - operator: Exists
         effect: NoSchedule
       containers:
       - name: whereabouts
+        command: [ "/bin/sh" ]
+        args:
+          - -c
+          - >
+            SLEEP=false /install-cni.sh &&
+            /ip-control-loop -log-level debug
         image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest-amd64
         env:
+        - name: NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
         - name: WHEREABOUTS_NAMESPACE
           valueFrom:
             fieldRef:
@@ -87,10 +120,10 @@ spec:
         resources:
           requests:
             cpu: "100m"
-            memory: "50Mi"
+            memory: "100Mi"
           limits:
             cpu: "100m"
-            memory: "50Mi"
+            memory: "200Mi"
         securityContext:
           privileged: true
         volumeMounts:
