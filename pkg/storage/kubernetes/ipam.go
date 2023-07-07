@@ -22,6 +22,7 @@ import (
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/allocate"
 	whereaboutsv1alpha1 "github.com/k8snetworkplumbingwg/whereabouts/pkg/api/whereabouts.cni.cncf.io/v1alpha1"
 	wbclient "github.com/k8snetworkplumbingwg/whereabouts/pkg/client/clientset/versioned"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/iphelpers"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/storage"
 	whereaboutstypes "github.com/k8snetworkplumbingwg/whereabouts/pkg/types"
@@ -91,19 +92,22 @@ func toIPReservationList(allocations map[string]whereaboutsv1alpha1.IPAllocation
 			logging.Errorf("Error decoding ip offset (backend: kubernetes): %v", err)
 			continue
 		}
-		ip := allocate.IPAddOffset(firstip, uint64(numOffset))
+		ip := iphelpers.IPAddOffset(firstip, uint64(numOffset))
 		reservelist = append(reservelist, whereaboutstypes.IPReservation{IP: ip, ContainerID: a.ContainerID, PodRef: a.PodRef})
 	}
 	return reservelist
 }
 
-func toAllocationMap(reservelist []whereaboutstypes.IPReservation, firstip net.IP) map[string]whereaboutsv1alpha1.IPAllocation {
+func toAllocationMap(reservelist []whereaboutstypes.IPReservation, firstip net.IP) (map[string]whereaboutsv1alpha1.IPAllocation, error) {
 	allocations := make(map[string]whereaboutsv1alpha1.IPAllocation)
 	for _, r := range reservelist {
-		index := allocate.IPGetOffset(r.IP, firstip)
+		index, err := iphelpers.IPGetOffset(r.IP, firstip)
+		if err != nil {
+			return nil, err
+		}
 		allocations[fmt.Sprintf("%d", index)] = whereaboutsv1alpha1.IPAllocation{ContainerID: r.ContainerID, PodRef: r.PodRef}
 	}
-	return allocations
+	return allocations, nil
 }
 
 // GetIPPool returns a storage.IPPool for the given range
@@ -193,20 +197,16 @@ func (i *KubernetesIPAM) GetOverlappingRangeStore() (storage.OverlappingRangeSto
 	return &KubernetesOverlappingRangeStore{i.client, i.containerID, i.namespace}, nil
 }
 
-// IsAllocatedInOverlappingRange checks for IP addresses to see if they're allocated cluster wide, for overlapping ranges
-func (c *KubernetesOverlappingRangeStore) IsAllocatedInOverlappingRange(ctx context.Context, ip net.IP) (bool, error) {
+// IsAllocatedInOverlappingRange checks for IP addresses to see if they're allocated cluster wide, for overlapping
+// ranges.
+func (c *KubernetesOverlappingRangeStore) IsAllocatedInOverlappingRange(ctx context.Context, ip net.IP,
+	networkName string) (bool, error) {
+	normalizedIP := normalizeIP(ip, networkName)
 
-	// IPv6 doesn't make for valid CR names, so normalize it.
-	ipStr := fmt.Sprint(ip)
-	if ipStr[len(ipStr)-1] == ':' {
-		ipStr += "0"
-		logging.Debugf("modified: %s", ipStr)
-	}
-	normalizedip := strings.ReplaceAll(ipStr, ":", "-")
+	logging.Debugf("OverlappingRangewide allocation check; normalized IP: %q, IP: %q, networkName: %q",
+		normalizedIP, ip, networkName)
 
-	logging.Debugf("OverlappingRangewide allocation check for IP: %v", normalizedip)
-
-	_, err := c.client.WhereaboutsV1alpha1().OverlappingRangeIPReservations(c.namespace).Get(ctx, normalizedip, metav1.GetOptions{})
+	_, err := c.client.WhereaboutsV1alpha1().OverlappingRangeIPReservations(c.namespace).Get(ctx, normalizedIP, metav1.GetOptions{})
 	if err != nil && errors.IsNotFound(err) {
 		// cluster ip reservation does not exist, this appears to be good news.
 		// logging.Debugf("IP %v is not reserved cluster wide, allowing.", ip)
@@ -216,22 +216,18 @@ func (c *KubernetesOverlappingRangeStore) IsAllocatedInOverlappingRange(ctx cont
 		return false, fmt.Errorf("k8s get OverlappingRangeIPReservation error: %s", err)
 	}
 
-	logging.Debugf("IP %v is reserved cluster wide.", ip)
+	logging.Debugf("Normalized IP is reserved; normalized IP: %q, IP: %q, networkName: %q",
+		normalizedIP, ip, networkName)
 	return true, nil
 }
 
 // UpdateOverlappingRangeAllocation updates clusterwide allocation for overlapping ranges.
-func (c *KubernetesOverlappingRangeStore) UpdateOverlappingRangeAllocation(ctx context.Context, mode int, ip net.IP, containerID string, podRef string) error {
-	// Normalize the IP
-	ipStr := fmt.Sprint(ip)
-	if ipStr[len(ipStr)-1] == ':' {
-		ipStr += "0"
-		logging.Debugf("modified: %s", ipStr)
-	}
-	normalizedip := strings.ReplaceAll(ipStr, ":", "-")
+func (c *KubernetesOverlappingRangeStore) UpdateOverlappingRangeAllocation(ctx context.Context, mode int, ip net.IP,
+	containerID, podRef, networkName string) error {
+	normalizedIP := normalizeIP(ip, networkName)
 
 	clusteripres := &whereaboutsv1alpha1.OverlappingRangeIPReservation{
-		ObjectMeta: metav1.ObjectMeta{Name: normalizedip, Namespace: c.namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: normalizedIP, Namespace: c.namespace},
 	}
 
 	var err error
@@ -262,6 +258,21 @@ func (c *KubernetesOverlappingRangeStore) UpdateOverlappingRangeAllocation(ctx c
 	return nil
 }
 
+// normalizeIP normalizes the IP. This is important for IPv6 which doesn't make for valid CR names. It also allows us
+// to add the network-name when it's different from the unnamed network.
+func normalizeIP(ip net.IP, networkName string) string {
+	ipStr := fmt.Sprint(ip)
+	if ipStr[len(ipStr)-1] == ':' {
+		ipStr += "0"
+		logging.Debugf("modified: %s", ipStr)
+	}
+	normalizedIP := strings.ReplaceAll(ipStr, ":", "-")
+	if networkName != UnnamedNetwork {
+		normalizedIP = fmt.Sprintf("%s-%s", networkName, normalizedIP)
+	}
+	return normalizedIP
+}
+
 // KubernetesIPPool represents an IPPool resource and its parsed set of allocations
 type KubernetesIPPool struct {
 	client      wbclient.Interface
@@ -285,7 +296,11 @@ func (p *KubernetesIPPool) Update(ctx context.Context, reservations []whereabout
 	}
 
 	// update the pool before marshalling once again
-	p.pool.Spec.Allocations = toAllocationMap(reservations, p.firstIP)
+	allocations, err := toAllocationMap(reservations, p.firstIP)
+	if err != nil {
+		return err
+	}
+	p.pool.Spec.Allocations = allocations
 	modBytes, err := json.Marshal(p.pool)
 	if err != nil {
 		return err
@@ -509,13 +524,14 @@ func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *Kubernete
 				// When it's allocated overlappingrange wide, we add it to a local reserved list
 				// And we try again.
 				if ipamConf.OverlappingRanges {
-					isallocated, err := overlappingrangestore.IsAllocatedInOverlappingRange(requestCtx, newip.IP)
+					isAllocated, err := overlappingrangestore.IsAllocatedInOverlappingRange(requestCtx, newip.IP,
+						ipamConf.NetworkName)
 					if err != nil {
 						logging.Errorf("Error checking overlappingrange allocation: %v", err)
 						return newips, err
 					}
 
-					if isallocated {
+					if isAllocated {
 						logging.Debugf("Continuing loop, IP is already allocated (possibly from another range): %v", newip)
 						// We create "dummy" records here for evaluation, but, we need to filter those out later.
 						overlappingrangeallocations = append(overlappingrangeallocations, whereaboutstypes.IPReservation{IP: newip.IP, IsAllocated: true})
@@ -558,7 +574,8 @@ func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *Kubernete
 		}
 
 		if ipamConf.OverlappingRanges {
-			err = overlappingrangestore.UpdateOverlappingRangeAllocation(requestCtx, mode, ipforoverlappingrangeupdate, containerID, podRef)
+			err = overlappingrangestore.UpdateOverlappingRangeAllocation(requestCtx, mode, ipforoverlappingrangeupdate,
+				containerID, podRef, ipamConf.NetworkName)
 			if err != nil {
 				logging.Errorf("Error performing UpdateOverlappingRangeAllocation: %v", err)
 				return newips, err
