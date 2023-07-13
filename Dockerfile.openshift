@@ -34,7 +34,7 @@ RUN go build -mod vendor -o bin/whereabouts     cmd/whereabouts.go
 RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/4.14:base
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-base-openshift-4.14
 RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel9/bin && \
