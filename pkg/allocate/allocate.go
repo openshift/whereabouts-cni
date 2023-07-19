@@ -11,13 +11,15 @@ import (
 
 // AssignmentError defines an IP assignment error.
 type AssignmentError struct {
-	firstIP net.IP
-	lastIP  net.IP
-	ipnet   net.IPNet
+	firstIP       net.IP
+	lastIP        net.IP
+	ipnet         net.IPNet
+	excludeRanges []string
 }
 
 func (a AssignmentError) Error() string {
-	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %#v", a.firstIP, a.lastIP, a.ipnet)
+	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %s / excludeRanges: %v",
+		a.firstIP, a.lastIP, a.ipnet.String(), a.excludeRanges)
 }
 
 // AssignIP assigns an IP using a range and a reserve list.
@@ -179,23 +181,23 @@ func IPAddOffset(ip net.IP, offset uint64) net.IP {
 }
 
 // IterateForAssignment iterates given an IP/IPNet and a list of reserved IPs
-func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reservelist []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
-	firstip := rangeStart.To16()
-	var lastip net.IP
+func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reserveList []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
+	firstIP := rangeStart.To16()
+	var lastIP net.IP
 	if rangeEnd != nil {
-		lastip = rangeEnd.To16()
+		lastIP = rangeEnd.To16()
 	} else {
 		var err error
-		firstip, lastip, err = GetIPRange(rangeStart, ipnet)
+		firstIP, lastIP, err = GetIPRange(rangeStart, ipnet)
 		if err != nil {
 			logging.Errorf("GetIPRange request failed with: %v", err)
-			return net.IP{}, reservelist, err
+			return net.IP{}, reserveList, err
 		}
 	}
-	logging.Debugf("IterateForAssignment input >> ip: %v | ipnet: %v | first IP: %v | last IP: %v", rangeStart, ipnet, firstip, lastip)
+	logging.Debugf("IterateForAssignment input >> ip: %v | ipnet: %v | first IP: %v | last IP: %v", rangeStart, ipnet, firstIP, lastIP)
 
 	reserved := make(map[string]bool)
-	for _, r := range reservelist {
+	for _, r := range reserveList {
 		reserved[r.IP.String()] = true
 	}
 
@@ -209,8 +211,8 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 	// Iterate every IP address in the range
 	var assignedip net.IP
 	performedassignment := false
-	endip := IPAddOffset(lastip, uint64(1))
-	for i := firstip; ipnet.Contains(i) && !i.Equal(endip); i = IPAddOffset(i, uint64(1)) {
+	endip := IPAddOffset(lastIP, uint64(1))
+	for i := firstIP; ipnet.Contains(i) && !i.Equal(endip); i = IPAddOffset(i, uint64(1)) {
 		// if already reserved, skip it
 		if reserved[i.String()] {
 			continue
@@ -243,15 +245,15 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 
 		assignedip = i
 		logging.Debugf("Reserving IP: |%v|", assignedip.String()+" "+containerID)
-		reservelist = append(reservelist, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
+		reserveList = append(reserveList, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
 		break
 	}
 
 	if !performedassignment {
-		return net.IP{}, reservelist, AssignmentError{firstip, lastip, ipnet}
+		return net.IP{}, reserveList, AssignmentError{firstIP, lastIP, ipnet, excludeRanges}
 	}
 
-	return assignedip, reservelist, nil
+	return assignedip, reserveList, nil
 }
 
 func mergeIPAddress(net, host []byte) ([]byte, error) {
