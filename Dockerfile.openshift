@@ -1,21 +1,3 @@
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
-# URGENT! ART metadata configuration has a different number of FROMs
-# than this Dockerfile. ART will be unable to build your component or
-# reconcile this Dockerfile until that disparity is addressed.
 FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.20-openshift-4.14 AS rhel9
 ADD . /go/src/github.com/k8snetworkplumbingwg/whereabouts
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/whereabouts
@@ -34,7 +16,7 @@ RUN go build -mod vendor -o bin/whereabouts     cmd/whereabouts.go
 RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-base-openshift-4.14
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-base-openshift-4.14
 RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel9/bin && \
