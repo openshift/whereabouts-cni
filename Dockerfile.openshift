@@ -1,4 +1,4 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.20-openshift-4.14 AS rhel9
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.20-openshift-4.15 AS rhel9
 ADD . /go/src/github.com/k8snetworkplumbingwg/whereabouts
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/whereabouts
 ENV CGO_ENABLED=1
@@ -7,7 +7,7 @@ RUN go build -mod vendor -o bin/whereabouts     cmd/whereabouts.go
 RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.14 AS rhel8
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.20-openshift-4.15 AS rhel8
 ADD . /go/src/github.com/k8snetworkplumbingwg/whereabouts
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/whereabouts
 ENV CGO_ENABLED=1
@@ -16,7 +16,7 @@ RUN go build -mod vendor -o bin/whereabouts     cmd/whereabouts.go
 RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-base-openshift-4.14
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-base-openshift-4.15
 RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel9/bin && \
