@@ -13,12 +13,12 @@ require (
 	github.com/onsi/ginkgo v1.14.1
 	github.com/onsi/gomega v1.10.2
 	github.com/pkg/errors v0.9.1
+	golang.org/x/net v0.17.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.1.0
 	k8s.io/api v0.22.6
 	k8s.io/apimachinery v0.22.6
 	k8s.io/client-go v0.22.6
 	sigs.k8s.io/controller-runtime v0.8.2
-	sigs.k8s.io/controller-tools v0.4.1 // indirect
 )
 
 replace github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
