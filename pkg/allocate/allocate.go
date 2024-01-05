@@ -11,13 +11,15 @@ import (
 
 // AssignmentError defines an IP assignment error.
 type AssignmentError struct {
-	firstIP net.IP
-	lastIP  net.IP
-	ipnet   net.IPNet
+	firstIP       net.IP
+	lastIP        net.IP
+	ipnet         net.IPNet
+	excludeRanges []string
 }
 
 func (a AssignmentError) Error() string {
-	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %#v", a.firstIP, a.lastIP, a.ipnet)
+	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %s / excludeRanges: %v",
+		a.firstIP, a.lastIP, a.ipnet.String(), a.excludeRanges)
 }
 
 // AssignIP assigns an IP using a range and a reserve list.
@@ -102,10 +104,14 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 	for _, r := range reserveList {
 		reserved[r.IP.String()] = true
 	}
+
 	// Build excluded list, "192.168.2.229/30", "192.168.1.229/30".
 	excluded := []*net.IPNet{}
 	for _, v := range excludeRanges {
-		_, subnet, _ := net.ParseCIDR(v)
+		subnet, err := parseExcludedRange(v)
+		if err != nil {
+			return net.IP{}, reserveList, fmt.Errorf("could not parse exclude range, err: %q", err)
+		}
 		excluded = append(excluded, subnet)
 	}
 
@@ -129,7 +135,7 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 	}
 
 	// No IP address for assignment found, return an error.
-	return net.IP{}, reserveList, AssignmentError{firstIP, lastIP, ipnet}
+	return net.IP{}, reserveList, AssignmentError{firstIP, lastIP, ipnet, excludeRanges}
 }
 
 // skipExcludedSubnets iterates through all subnets and checks if ip is part of them. If i is part of one of the subnets,
@@ -143,4 +149,29 @@ func skipExcludedSubnets(ip net.IP, excluded []*net.IPNet) net.IP {
 		}
 	}
 	return nil
+}
+
+// parseExcludedRange parses a provided string to a net.IPNet.
+// If the provided string is a valid CIDR, return the net.IPNet for that CIDR.
+// If the provided string is a valid IP address, add the /32 or /128 prefix to form the CIDR and return the net.IPNet.
+// Otherwise, return the error.
+func parseExcludedRange(s string) (*net.IPNet, error) {
+	// Try parsing CIDRs.
+	_, subnet, err := net.ParseCIDR(s)
+	if err == nil {
+		return subnet, nil
+	}
+	// The user might have given a single IP address, try parsing that - if it does not parse, return the error that
+	// we got earlier.
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return nil, err
+	}
+	// If the address parses, check if it's IPv4 or IPv6 and add the correct prefix.
+	if ip.To4() != nil {
+		_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/32", s))
+	} else {
+		_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/128", s))
+	}
+	return subnet, err
 }
