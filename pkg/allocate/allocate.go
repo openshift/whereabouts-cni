@@ -11,13 +11,15 @@ import (
 
 // AssignmentError defines an IP assignment error.
 type AssignmentError struct {
-	firstIP net.IP
-	lastIP  net.IP
-	ipnet   net.IPNet
+	firstIP       net.IP
+	lastIP        net.IP
+	ipnet         net.IPNet
+	excludeRanges []string
 }
 
 func (a AssignmentError) Error() string {
-	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %#v", a.firstIP, a.lastIP, a.ipnet)
+	return fmt.Sprintf("Could not allocate IP in range: ip: %v / - %v / range: %s / excludeRanges: %v",
+		a.firstIP, a.lastIP, a.ipnet.String(), a.excludeRanges)
 }
 
 // AssignIP assigns an IP using a range and a reserve list.
@@ -179,38 +181,41 @@ func IPAddOffset(ip net.IP, offset uint64) net.IP {
 }
 
 // IterateForAssignment iterates given an IP/IPNet and a list of reserved IPs
-func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reservelist []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
-	firstip := rangeStart.To16()
-	var lastip net.IP
+func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reserveList []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
+	firstIP := rangeStart.To16()
+	var lastIP net.IP
 	if rangeEnd != nil {
-		lastip = rangeEnd.To16()
+		lastIP = rangeEnd.To16()
 	} else {
 		var err error
-		firstip, lastip, err = GetIPRange(rangeStart, ipnet)
+		firstIP, lastIP, err = GetIPRange(rangeStart, ipnet)
 		if err != nil {
 			logging.Errorf("GetIPRange request failed with: %v", err)
-			return net.IP{}, reservelist, err
+			return net.IP{}, reserveList, err
 		}
 	}
-	logging.Debugf("IterateForAssignment input >> ip: %v | ipnet: %v | first IP: %v | last IP: %v", rangeStart, ipnet, firstip, lastip)
+	logging.Debugf("IterateForAssignment input >> ip: %v | ipnet: %v | first IP: %v | last IP: %v", rangeStart, ipnet, firstIP, lastIP)
 
 	reserved := make(map[string]bool)
-	for _, r := range reservelist {
+	for _, r := range reserveList {
 		reserved[r.IP.String()] = true
 	}
 
-	// excluded,            "192.168.2.229/30", "192.168.1.229/30",
+	// Build excluded list, "192.168.2.229/30", "192.168.1.229/30".
 	excluded := []*net.IPNet{}
 	for _, v := range excludeRanges {
-		_, subnet, _ := net.ParseCIDR(v)
+		subnet, err := parseExcludedRange(v)
+		if err != nil {
+			return net.IP{}, reserveList, fmt.Errorf("could not parse exclude range, err: %q", err)
+		}
 		excluded = append(excluded, subnet)
 	}
 
 	// Iterate every IP address in the range
 	var assignedip net.IP
 	performedassignment := false
-	endip := IPAddOffset(lastip, uint64(1))
-	for i := firstip; ipnet.Contains(i) && !i.Equal(endip); i = IPAddOffset(i, uint64(1)) {
+	endip := IPAddOffset(lastIP, uint64(1))
+	for i := firstIP; ipnet.Contains(i) && !i.Equal(endip); i = IPAddOffset(i, uint64(1)) {
 		// if already reserved, skip it
 		if reserved[i.String()] {
 			continue
@@ -243,15 +248,15 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 
 		assignedip = i
 		logging.Debugf("Reserving IP: |%v|", assignedip.String()+" "+containerID)
-		reservelist = append(reservelist, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
+		reserveList = append(reserveList, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
 		break
 	}
 
 	if !performedassignment {
-		return net.IP{}, reservelist, AssignmentError{firstip, lastip, ipnet}
+		return net.IP{}, reserveList, AssignmentError{firstIP, lastIP, ipnet, excludeRanges}
 	}
 
-	return assignedip, reservelist, nil
+	return assignedip, reserveList, nil
 }
 
 func mergeIPAddress(net, host []byte) ([]byte, error) {
@@ -308,4 +313,29 @@ func GetIPRange(ip net.IP, ipnet net.IPNet) (net.IP, net.IP, error) {
 // IsIPv4 checks if an IP is v4.
 func IsIPv4(checkip net.IP) bool {
 	return checkip.To4() != nil
+}
+
+// parseExcludedRange parses a provided string to a net.IPNet.
+// If the provided string is a valid CIDR, return the net.IPNet for that CIDR.
+// If the provided string is a valid IP address, add the /32 or /128 prefix to form the CIDR and return the net.IPNet.
+// Otherwise, return the error.
+func parseExcludedRange(s string) (*net.IPNet, error) {
+	// Try parsing CIDRs.
+	_, subnet, err := net.ParseCIDR(s)
+	if err == nil {
+		return subnet, nil
+	}
+	// The user might have given a single IP address, try parsing that - if it does not parse, return the error that
+	// we got earlier.
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return nil, err
+	}
+	// If the address parses, check if it's IPv4 or IPv6 and add the correct prefix.
+	if ip.To4() != nil {
+		_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/32", s))
+	} else {
+		_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/128", s))
+	}
+	return subnet, err
 }
