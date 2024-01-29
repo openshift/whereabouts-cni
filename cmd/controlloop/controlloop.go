@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/go-co-op/gocron/v2"
+	"github.com/go-co-op/gocron"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -66,10 +66,7 @@ func main() {
 	networkController.Start(stopChan)
 	defer networkController.Shutdown()
 
-	s, err := gocron.NewScheduler(gocron.WithLocation(time.UTC))
-	if err != nil {
-		os.Exit(cronSchedulerCreationError)
-	}
+	s := gocron.NewScheduler(time.UTC)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -89,7 +86,7 @@ func main() {
 	if err != nil {
 		os.Exit(couldNotCreateConfigWatcherError)
 	}
-	s.Start()
+	s.StartAsync()
 
 	const reconcilerConfigMntFile = "/cron-schedule/..data"
 	p := func(e fsnotify.Event) bool {
@@ -101,9 +98,7 @@ func main() {
 		select {
 		case <-stopChan:
 			logging.Verbosef("shutting down network controller")
-			if err := s.Shutdown(); err != nil {
-				_ = logging.Errorf("error shutting : %v", err)
-			}
+			s.Stop()
 			return
 		case err := <-errorChan:
 			if err == nil {
