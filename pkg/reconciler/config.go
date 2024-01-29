@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/go-co-op/gocron/v2"
+	"github.com/go-co-op/gocron"
 
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/config"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
@@ -18,30 +18,24 @@ type ConfigWatcher struct {
 	configDir       string
 	configPath      string
 	currentSchedule string
-	job             gocron.Job
-	scheduler       gocron.Scheduler
+	scheduler       *gocron.Scheduler
 	handlerFunc     func()
-	jobFactoryFunc  func(string) gocron.JobDefinition
 	watcher         *fsnotify.Watcher
 }
 
-func NewConfigWatcher(configPath string, scheduler gocron.Scheduler, configWatcher *fsnotify.Watcher, handlerFunc func()) (*ConfigWatcher, error) {
+func NewConfigWatcher(configPath string, scheduler *gocron.Scheduler, configWatcher *fsnotify.Watcher, handlerFunc func()) (*ConfigWatcher, error) {
 	return newConfigWatcher(
 		configPath,
 		scheduler,
 		configWatcher,
-		func(schedule string) gocron.JobDefinition {
-			return gocron.CronJob(schedule, false)
-		},
 		handlerFunc,
 	)
 }
 
 func newConfigWatcher(
 	configPath string,
-	scheduler gocron.Scheduler,
+	scheduler *gocron.Scheduler,
 	configWatcher *fsnotify.Watcher,
-	cronJobFactoryFunc func(string) gocron.JobDefinition,
 	handlerFunc func(),
 ) (*ConfigWatcher, error) {
 	schedule, err := determineCronExpression(configPath)
@@ -49,23 +43,23 @@ func newConfigWatcher(
 		return nil, err
 	}
 
-	job, err := scheduler.NewJob(
-		cronJobFactoryFunc(schedule),
-		gocron.NewTask(handlerFunc),
-	)
+	job, err := scheduler.Cron(schedule).Do(handlerFunc)
 	if err != nil {
 		return nil, fmt.Errorf("error creating job: %v", err)
+	}
+
+	_, err = scheduler.Job(job).Update()
+	if err != nil {
+		_ = logging.Errorf("error updating scheduler: %v", err)
 	}
 
 	return &ConfigWatcher{
 		configDir:       filepath.Dir(configPath),
 		configPath:      configPath,
 		currentSchedule: schedule,
-		job:             job,
 		scheduler:       scheduler,
 		watcher:         configWatcher,
 		handlerFunc:     handlerFunc,
-		jobFactoryFunc:  cronJobFactoryFunc,
 	}, nil
 }
 
@@ -107,6 +101,7 @@ func (c *ConfigWatcher) syncConfig(relevantEventPredicate func(event fsnotify.Ev
 			updatedSchedule, err := determineCronExpression(c.configPath)
 			if err != nil {
 				_ = logging.Errorf("error determining cron expression from %q: %v", c.configPath, err)
+				continue
 			}
 			logging.Verbosef(
 				"configuration updated to file %q. New cron expression: %s",
@@ -118,18 +113,20 @@ func (c *ConfigWatcher) syncConfig(relevantEventPredicate func(event fsnotify.Ev
 				logging.Debugf("no changes in schedule, nothing to do.")
 				continue
 			}
-			updatedJob, err := c.scheduler.Update(
-				c.job.ID(),
-				c.jobFactoryFunc(updatedSchedule),
-				gocron.NewTask(c.handlerFunc),
-			)
+			job, err := c.scheduler.Cron(updatedSchedule).Do(c.handlerFunc)
 			if err != nil {
-				_ = logging.Errorf("error updating job %q configuration: %v", c.job.ID().String(), err)
+				_ = logging.Errorf("error updating CRON configuration: %v", err)
+				continue
+			}
+
+			_, err = c.scheduler.Job(job).Update()
+			if err != nil {
+				_ = logging.Errorf("error updating CRON configuration: %v", err)
+				continue
 			}
 			c.currentSchedule = updatedSchedule
 			logging.Verbosef(
-				"successfully updated CRON configuration id %q - new cron expression: %s",
-				updatedJob.ID().String(),
+				"successfully updated CRON configuration - new cron expression: %s",
 				updatedSchedule,
 			)
 		case err, ok := <-c.watcher.Errors:
