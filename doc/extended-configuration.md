@@ -134,11 +134,24 @@ spec:
 
 You'll note that in the `ipam` section there's a lot less parameters than are used in the previous examples.
 
-### Reconciler Cron Expression Configuration (optional)
+## Reconciler Cron Expression configuration for clusters via flatfile (optional)
 
-You may want to provide a cron expression to configure how frequently the ip-reconciler runs. This is done via the flatfile.
+You may want to provide a cron expression to configure how frequently the ip-reconciler runs. For clusters that have not yet been launched, this can be configured via the flatfile.
 
-Look for the following parameter `"reconciler_cron_expression"` located in `script/install-cni.sh` and change to your desired schedule.
+You can speficy the `WHEREABOUTS_RECONCILER_CRON` environment variable in your daemonset definition file to override the default cron expression:
+```yaml
+       env:
+        - name: WHEREABOUTS_RECONCILER_CRON
+          value: 30 * * * *
+```
+
+## Reconciler Cron Expression Configuration for live clusters via configmap (optional)
+
+You may want to provide a cron expression to configure how frequently the ip-reconciler runs.
+
+You can check that the whereabouts-config is present by running `kubectl get configmaps` in the namespace used for Whereabouts.
+
+To update the whereabouts-config, run `kubectl edit configmap whereabouts-config` and adjust the value to a valid cron expression of your liking. Shortly after, the reconciler schedule will update.
 
 ## Installing etcd. (optional)
 
