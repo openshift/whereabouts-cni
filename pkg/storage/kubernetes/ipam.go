@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,7 @@ const UnnamedNetwork string = ""
 type PoolIdentifier struct {
 	IpRange     string
 	NetworkName string
+	NodeName    string
 }
 
 func toIPReservationList(allocations map[string]whereaboutsv1alpha1.IPAllocation, firstip net.IP) []whereaboutstypes.IPReservation {
@@ -128,10 +130,20 @@ func (i *KubernetesIPAM) GetIPPool(ctx context.Context, poolIdentifier PoolIdent
 }
 
 func IPPoolName(poolIdentifier PoolIdentifier) string {
-	if poolIdentifier.NetworkName == UnnamedNetwork {
-		return normalizeRange(poolIdentifier.IpRange)
+	if poolIdentifier.NodeName != "" {
+		// fast node range naming convention
+		if poolIdentifier.NetworkName == UnnamedNetwork {
+			return fmt.Sprintf("%v-%v", poolIdentifier.NodeName, normalizeRange(poolIdentifier.IpRange))
+		} else {
+			return fmt.Sprintf("%v-%v-%v", poolIdentifier.NetworkName, poolIdentifier.NodeName, normalizeRange(poolIdentifier.IpRange))
+		}
 	} else {
-		return fmt.Sprintf("%s-%s", poolIdentifier.NetworkName, normalizeRange(poolIdentifier.IpRange))
+		// default naming convention
+		if poolIdentifier.NetworkName == UnnamedNetwork {
+			return normalizeRange(poolIdentifier.IpRange)
+		} else {
+			return fmt.Sprintf("%s-%s", poolIdentifier.NetworkName, normalizeRange(poolIdentifier.IpRange))
+		}
 	}
 }
 
@@ -343,9 +355,36 @@ func (p *KubernetesIPPool) Update(ctx context.Context, reservations []whereabout
 	return nil
 }
 
+// TODO: what's the best way to discover the node name? this should work in both controller pod and whereabouts host process
+func getNodeName() (string, error) {
+	envName := os.Getenv("NODENAME")
+	if envName != "" {
+		return strings.TrimSpace(envName), nil
+	}
+	file, err := os.Open("/etc/hostname")
+	if err != nil {
+		logging.Errorf("Error opening file /etc/hostname: %v", err)
+		return "", err
+	}
+	defer file.Close()
+
+	// Read the contents of the file
+	data := make([]byte, 1024) // Adjust the buffer size as needed
+	n, err := file.Read(data)
+	if err != nil {
+		logging.Errorf("Error reading file /etc/hostname: %v", err)
+	}
+
+	// Convert bytes to string
+	hostname := string(data[:n])
+	hostname = strings.TrimSpace(hostname)
+	logging.Debugf("discovered current hostname as: %s", hostname)
+	return hostname, nil
+}
+
 // newLeaderElector creates a new leaderelection.LeaderElector and associated
 // channels by which to observe elections and depositions.
-func newLeaderElector(clientset kubernetes.Interface, namespace string, podNamespace string, podID string, leaseDuration int, renewDeadline int, retryPeriod int) (*leaderelection.LeaderElector, chan struct{}, chan struct{}) {
+func newLeaderElector(ctx context.Context, clientset kubernetes.Interface, namespace string, ipamConf *KubernetesIPAM) (*leaderelection.LeaderElector, chan struct{}, chan struct{}) {
 	//log.WithField("context", "leaderelection")
 	// leaderOK will block gRPC startup until it's closed.
 	leaderOK := make(chan struct{})
@@ -353,14 +392,31 @@ func newLeaderElector(clientset kubernetes.Interface, namespace string, podNames
 	// we are deposed as leader so that we can clean up.
 	deposed := make(chan struct{})
 
+	leaseName := "whereabouts"
+	if ipamConf.Config.NodeSliceSize != "" {
+		// we lock per IP Pool so just use the pool name for the lease name
+		hostname, err := getNodeName()
+		if err != nil {
+			logging.Errorf("Failed to create leader elector: %v", err)
+			return nil, leaderOK, deposed
+		}
+		nodeSliceRange, err := GetNodeSlicePoolRange(ctx, ipamConf, hostname)
+		if err != nil {
+			logging.Errorf("Failed to create leader elector: %v", err)
+			return nil, leaderOK, deposed
+		}
+		leaseName = IPPoolName(PoolIdentifier{IpRange: nodeSliceRange, NodeName: hostname, NetworkName: ipamConf.Config.NetworkName})
+	}
+	logging.Debugf("using lease with name: %v", leaseName)
+
 	var rl = &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
-			Name:      "whereabouts",
+			Name:      leaseName,
 			Namespace: namespace,
 		},
 		Client: clientset.CoordinationV1(),
 		LockConfig: resourcelock.ResourceLockConfig{
-			Identity: fmt.Sprintf("%s/%s", podNamespace, podID),
+			Identity: fmt.Sprintf("%s/%s", ipamConf.Config.PodNamespace, ipamConf.Config.PodName),
 		},
 	}
 
@@ -368,9 +424,9 @@ func newLeaderElector(clientset kubernetes.Interface, namespace string, podNames
 	// !bang
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:            rl,
-		LeaseDuration:   time.Duration(leaseDuration) * time.Millisecond,
-		RenewDeadline:   time.Duration(renewDeadline) * time.Millisecond,
-		RetryPeriod:     time.Duration(retryPeriod) * time.Millisecond,
+		LeaseDuration:   time.Duration(ipamConf.Config.LeaderLeaseDuration) * time.Millisecond,
+		RenewDeadline:   time.Duration(ipamConf.Config.LeaderRenewDeadline) * time.Millisecond,
+		RetryPeriod:     time.Duration(ipamConf.Config.LeaderRetryPeriod) * time.Millisecond,
 		ReleaseOnCancel: true,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(_ context.Context) {
@@ -401,7 +457,7 @@ func IPManagement(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 	}
 
 	// setup leader election
-	le, leader, deposed := newLeaderElector(client.clientSet, client.namespace, ipamConf.PodNamespace, ipamConf.PodName, ipamConf.LeaderLeaseDuration, ipamConf.LeaderRenewDeadline, ipamConf.LeaderRetryPeriod)
+	le, leader, deposed := newLeaderElector(ctx, client.clientSet, client.namespace, client)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -448,18 +504,40 @@ func IPManagement(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 		leCancel()
 		result <- (<-res)
 	}()
-
 	wg.Wait()
 	close(stopM)
 	logging.Debugf("IPManagement: %v, %v", newips, err)
 	return newips, err
 }
 
+func GetNodeSlicePoolRange(ctx context.Context, ipam *KubernetesIPAM, nodeName string) (string, error) {
+	logging.Debugf("ipam namespace is %v", ipam.namespace)
+	nodeSlice, err := ipam.client.WhereaboutsV1alpha1().NodeSlicePools(ipam.Config.Namespace).Get(ctx, getNodeSliceName(ipam), metav1.GetOptions{})
+	if err != nil {
+		logging.Errorf("error getting node slice %s/%s %v", ipam.Config.Namespace, getNodeSliceName(ipam), err)
+		return "", err
+	}
+	for _, allocation := range nodeSlice.Status.Allocations {
+		if allocation.NodeName == nodeName {
+			logging.Debugf("found matching node slice allocation for hostname %v: %v", nodeName, allocation)
+			return allocation.SliceRange, nil
+		}
+	}
+	logging.Errorf("error finding node within node slice allocations")
+	return "", fmt.Errorf("no allocated node slice for node")
+}
+
+func getNodeSliceName(ipam *KubernetesIPAM) string {
+	if ipam.Config.NetworkName == UnnamedNetwork {
+		return ipam.Config.Name
+	}
+	return ipam.Config.NetworkName
+}
+
 // IPManagementKubernetesUpdate manages k8s updates
 func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *KubernetesIPAM, ipamConf whereaboutstypes.IPAMConfig,
 	containerID string, podRef string) ([]net.IPNet, error) {
 	logging.Debugf("IPManagement -- mode: %v / containerID: %v / podRef: %v", mode, containerID, podRef)
-
 	var newips []net.IPNet
 	var newip net.IPNet
 	// Skip invalid modes
@@ -494,14 +572,47 @@ func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *Kubernete
 			default:
 				// retry the IPAM loop if the context has not been cancelled
 			}
-
 			overlappingrangestore, err = ipam.GetOverlappingRangeStore()
 			if err != nil {
 				logging.Errorf("IPAM error getting OverlappingRangeStore: %v", err)
 				return newips, err
 			}
-
-			pool, err = ipam.GetIPPool(requestCtx, PoolIdentifier{IpRange: ipRange.Range, NetworkName: ipamConf.NetworkName})
+			poolIdentifier := PoolIdentifier{IpRange: ipRange.Range, NetworkName: ipamConf.NetworkName}
+			if ipamConf.NodeSliceSize != "" {
+				hostname, err := getNodeName()
+				if err != nil {
+					logging.Errorf("Failed to get node hostname: %v", err)
+					return newips, err
+				}
+				poolIdentifier.NodeName = hostname
+				nodeSliceRange, err := GetNodeSlicePoolRange(ctx, ipam, hostname)
+				if err != nil {
+					return newips, err
+				}
+				_, ipNet, err := net.ParseCIDR(nodeSliceRange)
+				if err != nil {
+					logging.Errorf("Error parsing node slice cidr to net.IPNet: %v", err)
+					return newips, err
+				}
+				poolIdentifier.IpRange = nodeSliceRange
+				rangeStart, err := iphelpers.FirstUsableIP(*ipNet)
+				if err != nil {
+					logging.Errorf("Error parsing node slice cidr to range start: %v", err)
+					return newips, err
+				}
+				rangeEnd, err := iphelpers.LastUsableIP(*ipNet)
+				if err != nil {
+					logging.Errorf("Error parsing node slice cidr to range start: %v", err)
+					return newips, err
+				}
+				ipRange = whereaboutstypes.RangeConfiguration{
+					Range:      nodeSliceRange,
+					RangeStart: rangeStart,
+					RangeEnd:   rangeEnd,
+				}
+			}
+			logging.Debugf("using pool identifier: %v", poolIdentifier)
+			pool, err = ipam.GetIPPool(requestCtx, poolIdentifier)
 			if err != nil {
 				logging.Errorf("IPAM error reading pool allocations (attempt: %d): %v", j, err)
 				if e, ok := err.(storage.Temporary); ok && e.Temporary() {
