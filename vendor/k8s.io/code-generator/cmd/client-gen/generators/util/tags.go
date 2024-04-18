@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	"k8s.io/gengo/types"
+	"k8s.io/gengo/v2"
 )
 
 var supportedTags = []string{
@@ -105,7 +105,6 @@ var resultTypeSupportedVerbs = []string{
 // The 'input' is the input type used for creation (function argument).
 // The 'result' (not needed in this case) is the result type returned from the
 // client function.
-//
 type extension struct {
 	// VerbName is the name of the custom verb (Scale, Instantiate, etc..)
 	VerbName string
@@ -193,7 +192,7 @@ func MustParseClientGenTags(lines []string) Tags {
 // tags are provided.
 func ParseClientGenTags(lines []string) (Tags, error) {
 	ret := Tags{}
-	values := types.ExtractCommentTags("+", lines)
+	values := gengo.ExtractCommentTags("+", lines)
 	var value []string
 	value, ret.GenerateClient = values["genclient"]
 	// Check the old format and error when used to avoid generating client when //+genclient=false
