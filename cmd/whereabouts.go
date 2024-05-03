@@ -114,10 +114,7 @@ func cmdDel(args *skel.CmdArgs, client *kubernetes.KubernetesIPAM) error {
 	ctx, cancel := context.WithTimeout(context.Background(), types.DelTimeLimit)
 	defer cancel()
 
-	_, err := kubernetes.IPManagement(ctx, types.Deallocate, client.Config, client)
-	if err != nil {
-		logging.Verbosef("WARNING: Problem deallocating IP: %s", err)
-	}
+	_, _ = kubernetes.IPManagement(ctx, types.Deallocate, client.Config, client)
 
 	return nil
 }
