@@ -44,6 +44,7 @@ spec:
                 type: string
             required:
             - containerid
+            - podref
             type: object
         required:
         - spec
