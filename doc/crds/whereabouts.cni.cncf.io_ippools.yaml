@@ -47,6 +47,7 @@ spec:
                       type: string
                   required:
                   - id
+                  - podref
                   type: object
                 description: Allocations is the set of allocated IPs for the given
                   range. Its` indices are a direct mapping to the IP with the same
