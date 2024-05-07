@@ -39,7 +39,7 @@ func main() {
 		gocron.NewTask(
 			func(a string, b int) {
 				// do things
-            },
+			},
 			"hello",
 			1,
 		),
@@ -53,6 +53,11 @@ func main() {
 	// start the scheduler
 	s.Start()
 
+	// block until you are ready to shut down
+	select {
+	case <-time.After(time.Minute):
+	}
+
 	// when you're done, shut it down
 	err = s.Shutdown()
 	if err != nil {
@@ -60,6 +65,11 @@ func main() {
 	}
 }
 ```
+
+## Examples
+
+- [Go doc examples](https://pkg.go.dev/github.com/go-co-op/gocron/v2#pkg-examples)
+- [Examples directory](examples)
 
 ## Concepts
 
@@ -106,10 +116,13 @@ Multiple instances of gocron can be run.
 - [**Elector**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#WithDistributedElector):
 An elector can be used to elect a single instance of gocron to run as the primary with the
 other instances checking to see if a new leader needs to be elected.
-- Implementations: [go-co-op electors](https://github.com/go-co-op?q=-elector&type=all&language=&sort=)
+  - Implementations: [go-co-op electors](https://github.com/go-co-op?q=-elector&type=all&language=&sort=)
+    (don't see what you need? request on slack to get a repo created to contribute it!)
 - [**Locker**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#WithDistributedLocker):
 A locker can be used to lock each run of a job to a single instance of gocron.
-- Implementations: [go-co-op lockers](https://github.com/go-co-op?q=-lock&type=all&language=&sort=)
+Locker can be at job or scheduler, if it is defined both at job and scheduler then locker of job will take precedence.
+  - Implementations: [go-co-op lockers](https://github.com/go-co-op?q=-lock&type=all&language=&sort=)
+    (don't see what you need? request on slack to get a repo created to contribute it!)
 
 ### Events
 Job events can trigger actions.
@@ -134,6 +147,13 @@ Logs can be enabled.
 - [Logger](https://pkg.go.dev/github.com/go-co-op/gocron/v2#Logger):
 The Logger interface can be implemented with your desired logging library.
 The provided NewLogger uses the standard library's log package.
+
+### Metrics
+Metrics may be collected from the execution of each job.
+- [**Monitor**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#Monitor):
+A monitor can be used to collect metrics for each job from a scheduler.
+  - Implementations: [go-co-op monitors](https://github.com/go-co-op?q=-monitor&type=all&language=&sort=)
+    (don't see what you need? request on slack to get a repo created to contribute it!)
 
 ### Testing
 The gocron library is set up to enable testing.
