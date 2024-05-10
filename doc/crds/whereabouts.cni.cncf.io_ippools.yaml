@@ -43,6 +43,8 @@ spec:
                   properties:
                     id:
                       type: string
+                    ifname:
+                      type: string
                     podref:
                       type: string
                   required:
