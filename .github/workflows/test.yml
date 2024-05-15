@@ -4,28 +4,28 @@ jobs:
   test:
     strategy:
       matrix:
-        go-version: [1.20.x]
+        go-version: [1.21.x]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - name: Install Go
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
 
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Get all changed files excluding docs and README
       id: changed-files
-      uses: tj-actions/changed-files@v35
+      uses: tj-actions/changed-files@v44
       with:
         files_ignore: |
           **/*.md
           doc/*.{json,png,svg}
 
     - name: Run Revive Action by building from repository
-      uses: morphy2k/revive-action@v2.4.1
+      uses: morphy2k/revive-action@v2.5.7
       if: steps.changed-files.outputs.any_changed == 'true'
       with:
         exclude: "./vendor/..."
@@ -37,7 +37,7 @@ jobs:
 
     - name: Generate code
       if: steps.changed-files.outputs.any_changed == 'true'
-      run: ./hack/generate-code.sh && hack/verify-codegen.sh
+      run: chmod +x vendor/k8s.io/code-generator/generate-internal-groups.sh && ./hack/generate-code.sh && hack/verify-codegen.sh
 
     - name: Run go fmt
       if: steps.changed-files.outputs.any_changed == 'true'
@@ -72,16 +72,16 @@ jobs:
       NUMBER_OF_COMPUTE_NODES: 5
     steps:
       - name: Set up Go version
-        uses: actions/setup-go@v1
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.20.x
+          go-version: 1.21.x
 
       - name: Checkout code into the Go module directory
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Get all changed files excluding docs and README
         id: changed-files
-        uses: tj-actions/changed-files@v35
+        uses: tj-actions/changed-files@v44
         with:
           files_ignore: |
             **/*.md
