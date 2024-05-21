@@ -150,6 +150,55 @@ var _ = Describe("Whereabouts operations", func() {
 		}()
 	})
 
+	It("returns a previously allocated IP", func() {
+		ipVersion := "4"
+		ipamNetworkName := ""
+		cniVersion := "0.3.1"
+
+		ipRange := "192.168.1.0/24"
+		ipGateway := "192.168.10.1"
+		expectedAddress := "192.168.1.1/24"
+
+		ipamConf := ipamConfig(podName, podNamespace, ipamNetworkName, ipRange, ipGateway, kubeConfigPath)
+		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
+
+		wbClient := *kubernetes.NewKubernetesClient(
+			fake.NewSimpleClientset(
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, []whereaboutstypes.IPReservation{
+					{PodRef: ipamConf.GetPodRef(), IfName: ifname, IP: net.ParseIP(expectedAddress)}, {PodRef: "test"}}...)),
+			fakek8sclient.NewSimpleClientset(),
+			0)
+
+		cniConf, err := newCNINetConf(cniVersion, ipamConf)
+		Expect(err).NotTo(HaveOccurred())
+
+		args := &skel.CmdArgs{
+			ContainerID: "dummy",
+			Netns:       nspath,
+			IfName:      ifname,
+			StdinData:   cniConf,
+			Args:        cniArgs(podNamespace, podName),
+		}
+		client := mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient)
+
+		// Allocate the IP
+		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
+			return cmdAdd(client, cniVersion)
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.Index(string(raw), "\"version\":")).Should(BeNumerically(">", 0))
+
+		result, err := current.GetResult(r)
+		Expect(err).NotTo(HaveOccurred())
+
+		ExpectWithOffset(1, *result.IPs[0]).To(Equal(
+			current.IPConfig{
+				Version: ipVersion,
+				Address: mustCIDR(expectedAddress),
+				Gateway: ipamConf.Gateway,
+			}))
+	})
+
 	It("allocates and releases addresses on ADD/DEL", func() {
 		ipVersion := "4"
 		ipRange := "192.168.1.0/24"
@@ -1403,7 +1452,7 @@ users:
 `)
 }
 
-func ipPool(ipRange string, namespace string) *v1alpha1.IPPool {
+func ipPool(ipRange string, namespace string, podReferences ...whereaboutstypes.IPReservation) *v1alpha1.IPPool {
 	return &v1alpha1.IPPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            kubernetes.NormalizeRange(ipRange),
@@ -1411,9 +1460,22 @@ func ipPool(ipRange string, namespace string) *v1alpha1.IPPool {
 			ResourceVersion: "1",
 		},
 		Spec: v1alpha1.IPPoolSpec{
-			Range: ipRange,
+			Range:       ipRange,
+			Allocations: allocations(podReferences...),
 		},
 	}
+}
+
+func allocations(podReferences ...whereaboutstypes.IPReservation) map[string]v1alpha1.IPAllocation {
+	poolAllocations := map[string]v1alpha1.IPAllocation{}
+	for i, r := range podReferences {
+		poolAllocations[fmt.Sprintf("%d", i+1)] = v1alpha1.IPAllocation{
+			ContainerID: "",
+			PodRef:      r.PodRef,
+			IfName:      r.IfName,
+		}
+	}
+	return poolAllocations
 }
 
 func newCNINetConf(cniVersion string, ipamConfig *whereaboutstypes.IPAMConfig) ([]byte, error) {
