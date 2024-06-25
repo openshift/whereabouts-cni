@@ -59,7 +59,7 @@ func NewReconcileLooperWithClient(ctx context.Context, k8sClient *kubernetes.Cli
 	}
 
 	whereaboutsPodRefs := getPodRefsServedByWhereabouts(ipPools)
-	looper := &ReconcileLooper{
+	looper := &ReconcileLooper{https://github.com/k8snetworkplumbingwg/whereabouts/blob/44e552728f75bb50d396110c915f22e593881014/pkg/reconciler/iploop.go#L133
 		k8sClient:           *k8sClient,
 		liveWhereaboutsPods: indexPods(pods, whereaboutsPodRefs),
 		requestTimeout:      timeout,
@@ -129,7 +129,7 @@ func (rl ReconcileLooper) isOrphanedIP(podRef string, ip string) bool {
 							logging.Debugf("Pod now has IP annotation while in Pending")
 							return true
 						}
-						time.Sleep(time.Duration(500) * time.Millisecond)
+						time.Sleep(time.Duration(250) * time.Millisecond)
 					}
 				}
 				isFound = isIpOnPod(podToMatch, podRef, ip)
