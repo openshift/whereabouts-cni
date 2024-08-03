@@ -41,38 +41,45 @@ func TestAPIs(t *testing.T) {
 		[]Reporter{})
 }
 
-func AllocateAndReleaseAddressesTest(ipVersion string, ipamConf *whereaboutstypes.IPAMConfig, expectedAddresses []string) {
+func AllocateAndReleaseAddressesTest(ipVersion string, ipRange string, gw string, kubeconfigPath string, expectedAddresses []string) {
 	const (
-		ifname       string = "eth0"
-		nspath       string = "/some/where"
-		cniVersion          = "0.3.1"
-		podName             = "dummyPOD"
-		podNamespace        = "dummyNS"
+		ifname          = "eth0"
+		nspath          = "/some/where"
+		cniVersion      = "0.3.1"
+		podName         = "dummyPOD"
+		podNamespace    = "dummyNS"
+		ipamNetworkName = ""
 	)
 
-	addressArgs := []*skel.CmdArgs{}
-
-	cniConf, err := newCNINetConf(cniVersion, ipamConf)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(ipamConf.IPRanges).NotTo(BeEmpty())
+	// Only used to get the parsed IP range.
+	conf := ipamConfig(podName, podNamespace, ipamNetworkName, ipRange, gw, kubeconfigPath)
 	wbClient := *kubernetes.NewKubernetesClient(
 		fake.NewSimpleClientset(
-			ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
+			ipPool(conf.IPRanges[0].Range, podNamespace)),
 		fakek8sclient.NewSimpleClientset(),
 		0)
+
 	for i := 0; i < len(expectedAddresses); i++ {
+		name := fmt.Sprintf("%s-%d", podName, i)
+
+		ipamConf := ipamConfig(name, podNamespace, ipamNetworkName, ipRange, gw, kubeconfigPath)
+		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
+
+		cniConf, err := newCNINetConf(cniVersion, ipamConf)
+		Expect(err).NotTo(HaveOccurred())
+
 		args := &skel.CmdArgs{
 			ContainerID: fmt.Sprintf("dummy-%d", i),
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   cniConf,
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, name),
 		}
-		client := mutateK8sIPAM(args.ContainerID, ipamConf, wbClient)
+		client := mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient)
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, client, cniVersion)
+			return cmdAdd(client, cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strings.Index(string(raw), "\"version\":")).Should(BeNumerically(">", 0))
@@ -90,14 +97,14 @@ func AllocateAndReleaseAddressesTest(ipVersion string, ipamConf *whereaboutstype
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, client)
+			return cmdDel(client)
 		})
 		ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 		// Now, create the same thing again, and expect the same IP
 		// That way we know it dealloced the IP and assigned it again.
 		r, _, err = testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, client, cniVersion)
+			return cmdAdd(client, cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 
@@ -110,23 +117,6 @@ func AllocateAndReleaseAddressesTest(ipVersion string, ipamConf *whereaboutstype
 				Address: mustCIDR(expectedAddresses[i]),
 				Gateway: ipamConf.Gateway,
 			}))
-
-		addressArgs = append(addressArgs, args)
-	}
-
-	for _, args := range addressArgs {
-		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
-		// And we'll release the IP again.
-		err := testutils.CmdDelWithArgs(args, func() error {
-			client := newK8sIPAM(
-				args.ContainerID,
-				ipamConf,
-				fakek8sclient.NewSimpleClientset(),
-				fake.NewSimpleClientset(
-					ipPool(ipamConf.IPRanges[0].Range, podNamespace)))
-			return cmdDel(args, client)
-		})
-		Expect(err).NotTo(HaveOccurred())
 	}
 }
 
@@ -134,6 +124,8 @@ var _ = Describe("Whereabouts operations", func() {
 	const (
 		podName      = "dummyPOD"
 		podNamespace = "dummyNS"
+		ifname       = "eth0"
+		nspath       = "/some/where"
 	)
 
 	var (
@@ -158,27 +150,69 @@ var _ = Describe("Whereabouts operations", func() {
 		}()
 	})
 
+	It("returns a previously allocated IP", func() {
+		ipVersion := "4"
+		ipamNetworkName := ""
+		cniVersion := "0.3.1"
+
+		ipRange := "192.168.1.0/24"
+		ipGateway := "192.168.10.1"
+		expectedAddress := "192.168.1.1/24"
+
+		ipamConf := ipamConfig(podName, podNamespace, ipamNetworkName, ipRange, ipGateway, kubeConfigPath)
+		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
+
+		wbClient := *kubernetes.NewKubernetesClient(
+			fake.NewSimpleClientset(
+				ipPool(ipamConf.IPRanges[0].Range, podNamespace, []whereaboutstypes.IPReservation{
+					{PodRef: ipamConf.GetPodRef(), IfName: ifname, IP: net.ParseIP(expectedAddress)}, {PodRef: "test"}}...)),
+			fakek8sclient.NewSimpleClientset(),
+			0)
+
+		cniConf, err := newCNINetConf(cniVersion, ipamConf)
+		Expect(err).NotTo(HaveOccurred())
+
+		args := &skel.CmdArgs{
+			ContainerID: "dummy",
+			Netns:       nspath,
+			IfName:      ifname,
+			StdinData:   cniConf,
+			Args:        cniArgs(podNamespace, podName),
+		}
+		client := mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient)
+
+		// Allocate the IP
+		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
+			return cmdAdd(client, cniVersion)
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.Index(string(raw), "\"version\":")).Should(BeNumerically(">", 0))
+
+		result, err := current.GetResult(r)
+		Expect(err).NotTo(HaveOccurred())
+
+		ExpectWithOffset(1, *result.IPs[0]).To(Equal(
+			current.IPConfig{
+				Version: ipVersion,
+				Address: mustCIDR(expectedAddress),
+				Gateway: ipamConf.Gateway,
+			}))
+	})
+
 	It("allocates and releases addresses on ADD/DEL", func() {
 		ipVersion := "4"
 		ipRange := "192.168.1.0/24"
 		ipGateway := "192.168.10.1"
 		expectedAddress := "192.168.1.1/24"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 
 		ipVersion = "6"
 		ipRange = "2001::1/116"
 		ipGateway = "2001::f:1"
 		expectedAddress = "2001::1/116"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases addresses on ADD/DEL with a Kubernetes backend", func() {
@@ -202,81 +236,50 @@ var _ = Describe("Whereabouts operations", func() {
 			"192.168.1.22/24",
 		}
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			expectedAddresses,
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, expectedAddresses)
 
 		ipVersion = "6"
 		ipRange = "2001::1/116"
 		ipGateway = "2001::f:1"
 		expectedAddress = "2001::1/116"
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases an IPv6 address with left-hand zeroes on ADD/DEL with a Kubernetes backend", func() {
-
 		ipVersion := "6"
 		ipRange := "fd::1/116"
 		ipGateway := "fd::f:1"
 		expectedAddress := "fd::1/116"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases an IPv6 range that ends with zeroes with a Kubernetes backend", func() {
-
 		ipVersion := "6"
 		ipRange := "2001:db8:480:603d:0304:0403:000:0000-2001:db8:480:603d:0304:0403:0000:0004/64"
 		ipGateway := "2001:db8:480:603d::1"
 		expectedAddress := "2001:db8:480:603d:0304:0403:000:0000/64"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 
 		ipRange = "2001:db8:5422:0005::-2001:db8:5422:0005:7fff:ffff:ffff:ffff/64"
 		ipGateway = "2001:db8:5422:0005::1"
 		expectedAddress = "2001:db8:5422:0005::/64"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates IPv6 addresses with DNS-1123 conformant naming with a Kubernetes backend", func() {
-
 		ipVersion := "6"
 		ipRange := "fd00:0:0:10:0:0:3:1-fd00:0:0:10:0:0:3:6/64"
 		ipGateway := "2001::f:1"
 		expectedAddress := "fd00:0:0:10:0:0:3:1/64"
 
-		AllocateAndReleaseAddressesTest(
-			ipVersion,
-			ipamConfig(podName, podNamespace, ipRange, ipGateway, kubeConfigPath),
-			[]string{expectedAddress},
-		)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("excludes a range of addresses", func() {
-		const (
-			ifname string = "eth0"
-			nspath string = "/some/where"
-		)
-
 		conf := fmt.Sprintf(`{
       "cniVersion": "0.3.1",
       "name": "mynet",
@@ -312,6 +315,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -319,7 +323,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -338,15 +342,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("excludes a range of IPv6 addresses", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
       "cniVersion": "0.3.1",
@@ -384,6 +385,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -391,7 +393,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -410,16 +412,13 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("excludes a range of IPv6 addresses, omitting broadcast", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
       "cniVersion": "0.3.1",
@@ -453,6 +452,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -460,7 +460,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -479,16 +479,13 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("can still assign static parameters", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
       "cniVersion": "0.3.1",
@@ -533,6 +530,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -540,7 +538,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 		// fmt.Printf("!bang raw: %s\n", raw)
 		Expect(err).NotTo(HaveOccurred())
@@ -582,16 +580,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
-
 	})
 
 	It("allocates an address using IPRanges notation", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -622,6 +616,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -629,7 +624,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -645,15 +640,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allocates DualStack address using IPRanges notation", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -686,6 +678,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).To(HaveLen(2))
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -694,7 +687,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -711,15 +704,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allocates addresses using both IPRanges and range notations", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -751,6 +741,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).To(HaveLen(2))
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -759,7 +750,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -776,15 +767,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allocates an address using start/end cidr notation", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -814,6 +802,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -821,7 +810,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -841,15 +830,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allocates an address using the range_start parameter", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -880,6 +866,7 @@ var _ = Describe("Whereabouts operations", func() {
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
 		k8sClient = newK8sIPAM(
 			args.ContainerID,
+			ifname,
 			ipamConf,
 			fakek8sclient.NewSimpleClientset(),
 			fake.NewSimpleClientset(
@@ -887,7 +874,7 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, k8sClient, cniVersion)
+			return cmdAdd(k8sClient, cniVersion)
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -907,15 +894,12 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, k8sClient)
+			return cmdDel(k8sClient)
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allocates addresses using range_end as an upper limit", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
-
 		backend := fmt.Sprintf(`"kubernetes": {"kubeconfig": "%s"}`, kubeConfigPath)
 		conf := fmt.Sprintf(`{
 			"cniVersion": "0.3.1",
@@ -937,26 +921,30 @@ var _ = Describe("Whereabouts operations", func() {
 		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, podName), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
+
 		wbClient := *kubernetes.NewKubernetesClient(
 			fake.NewSimpleClientset(
 				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
 			fakek8sclient.NewSimpleClientset(),
 			0)
 
-		var ipArgs []*skel.CmdArgs
 		// allocate 8 IPs (192.168.1.5 - 192.168.1.12); the entirety of the pool defined above
 		for i := 0; i < 8; i++ {
+			name := fmt.Sprintf("%s-%d", podName, i)
 			args := &skel.CmdArgs{
 				ContainerID: fmt.Sprintf("dummy-%d", i),
 				Netns:       nspath,
 				IfName:      ifname,
 				StdinData:   []byte(conf),
-				Args:        cniArgs(podNamespace, podName),
+				Args:        cniArgs(podNamespace, name),
 			}
 
-			k8sClient = mutateK8sIPAM(args.ContainerID, ipamConf, wbClient)
+			ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, name), "")
+			Expect(err).NotTo(HaveOccurred())
+
+			k8sClient = mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient)
 			r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-				return cmdAdd(args, k8sClient, cniVersion)
+				return cmdAdd(k8sClient, cniVersion)
 			})
 
 			Expect(err).NotTo(HaveOccurred())
@@ -971,40 +959,47 @@ var _ = Describe("Whereabouts operations", func() {
 					Address: mustCIDR(fmt.Sprintf("192.168.1.%d/24", 5+i)),
 					Gateway: net.ParseIP("192.168.10.1"),
 				}))
-			ipArgs = append(ipArgs, args)
 		}
 
 		// assigning more IPs should result in error due to the defined range_start - range_end
+		name := fmt.Sprintf("%s-dummy-failure", podName)
 		args := &skel.CmdArgs{
 			ContainerID: "dummy-failure",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(conf),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, name),
 		}
+
+		ipamConf, cniVersion, err = config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, name), "")
+		Expect(err).NotTo(HaveOccurred())
+
+		k8sClient = mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient)
 		_, _, err = testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient), "0.3.1")
+			return cmdAdd(k8sClient, cniVersion)
 		})
 		Expect(err).To(HaveOccurred())
+
 		// ensure the error is of the correct type
 		switch e := errors.Unwrap(err); e.(type) {
 		case allocate.AssignmentError:
 		default:
 			Fail(fmt.Sprintf("expected AssignmentError, got: %s", e))
 		}
-
-		// Release assigned IPs
-		for _, args := range ipArgs {
-			err := testutils.CmdDelWithArgs(args, func() error {
-				return cmdDel(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient))
-			})
-			Expect(err).NotTo(HaveOccurred())
-		}
 	})
 
 	It("detects IPv4 addresses used in other ranges, to allow for overlapping IP address ranges", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
+		firstPodName := "dummyfirstrange"
+		secondPodName := "dummysecondrange"
+
+		firstRange := "192.168.22.0/24"
+		secondRange := "192.168.22.0/28"
+
+		wbClient := *kubernetes.NewKubernetesClient(
+			fake.NewSimpleClientset(
+				ipPool(firstRange, podNamespace), ipPool(secondRange, podNamespace)),
+			fakek8sclient.NewSimpleClientset(),
+			0)
 
 		// ----------------------------- range 1
 
@@ -1019,30 +1014,25 @@ var _ = Describe("Whereabouts operations", func() {
 		  "log_file" : "/tmp/whereabouts.log",
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
-		  "range": "192.168.22.0/24"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, firstRange)
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummyfirstrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(conf),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, firstPodName),
 		}
 
-		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, podName), "")
+		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, firstPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
-		wbClient := *kubernetes.NewKubernetesClient(
-			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
-			fakek8sclient.NewSimpleClientset(),
-			0)
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient), cniVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient), cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1071,24 +1061,24 @@ var _ = Describe("Whereabouts operations", func() {
 		  "log_file" : "/tmp/whereabouts.log",
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
-		  "range": "192.168.22.0/28"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, secondRange)
 
 		argssecond := &skel.CmdArgs{
 			ContainerID: "dummysecondrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(confsecond),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, secondPodName),
 		}
 
-		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, podName), "")
+		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, secondPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		// Allocate the IP
 		r, raw, err = testutils.CmdAddWithArgs(argssecond, func() error {
-			return cmdAdd(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient), secondCNIVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient), secondCNIVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1108,21 +1098,30 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP, first range
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient))
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Release the IP, second range
 		err = testutils.CmdDelWithArgs(argssecond, func() error {
-			return cmdDel(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient))
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 	})
 
 	It("detects IPv6 addresses used in other ranges, to allow for overlapping IP address ranges", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
+		firstPodName := "dummyfirstrange"
+		secondPodName := "dummysecondrange"
+
+		firstRange := "2001::2:3:0/124"
+		secondRange := "2001::2:3:0/126"
+
+		wbClient := *kubernetes.NewKubernetesClient(
+			fake.NewSimpleClientset(
+				ipPool(firstRange, podNamespace), ipPool(secondRange, podNamespace)),
+			fakek8sclient.NewSimpleClientset(),
+			0)
 
 		// ----------------------------- range 1
 
@@ -1137,30 +1136,25 @@ var _ = Describe("Whereabouts operations", func() {
 		  "log_file" : "/tmp/whereabouts.log",
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
-		  "range": "2001::2:3:0/124"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, firstRange)
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummyfirstrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(conf),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, firstPodName),
 		}
 
-		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, podName), "")
+		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, firstPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
-		wbClient := *kubernetes.NewKubernetesClient(
-			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
-			fakek8sclient.NewSimpleClientset(),
-			0)
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient), cniVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient), cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1189,24 +1183,24 @@ var _ = Describe("Whereabouts operations", func() {
 		  "log_file" : "/tmp/whereabouts.log",
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
-		  "range": "2001::2:3:0/126"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, secondRange)
 
 		argssecond := &skel.CmdArgs{
 			ContainerID: "dummysecondrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(confsecond),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, secondPodName),
 		}
 
-		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, podName), "")
+		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, secondPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		// Allocate the IP
 		r, raw, err = testutils.CmdAddWithArgs(argssecond, func() error {
-			return cmdAdd(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient), secondCNIVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient), secondCNIVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1226,21 +1220,30 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP, first range
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient))
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Release the IP, second range
 		err = testutils.CmdDelWithArgs(argssecond, func() error {
-			return cmdDel(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient))
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("allows IP collisions across ranges when enable_overlapping_ranges is set to false", func() {
-		const ifname string = "eth0"
-		const nspath string = "/some/where"
+		firstPodName := "dummyfirstrange"
+		secondPodName := "dummysecondrange"
+
+		firstRange := "192.168.33.0/24"
+		secondRange := "192.168.33.0/28"
+
+		wbClient := *kubernetes.NewKubernetesClient(
+			fake.NewSimpleClientset(
+				ipPool(firstRange, podNamespace), ipPool(secondRange, podNamespace)),
+			fakek8sclient.NewSimpleClientset(),
+			0)
 
 		// ----------------------------- range 1
 
@@ -1256,30 +1259,25 @@ var _ = Describe("Whereabouts operations", func() {
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
 		  "enable_overlapping_ranges": false,
-		  "range": "192.168.33.0/24"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, firstRange)
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummyfirstrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(conf),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, firstPodName),
 		}
 
-		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, podName), "")
+		ipamConf, cniVersion, err := config.LoadIPAMConfig([]byte(conf), cniArgs(podNamespace, firstPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ipamConf.IPRanges).NotTo(BeEmpty())
-		wbClient := *kubernetes.NewKubernetesClient(
-			fake.NewSimpleClientset(
-				ipPool(ipamConf.IPRanges[0].Range, podNamespace)),
-			fakek8sclient.NewSimpleClientset(),
-			0)
 
 		// Allocate the IP
 		r, raw, err := testutils.CmdAddWithArgs(args, func() error {
-			return cmdAdd(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient), cniVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient), cniVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1308,24 +1306,24 @@ var _ = Describe("Whereabouts operations", func() {
 		  "log_file" : "/tmp/whereabouts.log",
 			"log_level" : "debug",
 		  "kubernetes": {"kubeconfig": "%s"},
-		  "range": "192.168.33.0/28"
+		  "range": %q
 		}
-	  }`, kubeConfigPath)
+	  }`, kubeConfigPath, secondRange)
 
 		argssecond := &skel.CmdArgs{
 			ContainerID: "dummysecondrange",
 			Netns:       nspath,
 			IfName:      ifname,
 			StdinData:   []byte(confsecond),
-			Args:        cniArgs(podNamespace, podName),
+			Args:        cniArgs(podNamespace, secondPodName),
 		}
 
-		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, podName), "")
+		secondIPAMConf, secondCNIVersion, err := config.LoadIPAMConfig([]byte(confsecond), cniArgs(podNamespace, secondPodName), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		// Allocate the IP
 		r, raw, err = testutils.CmdAddWithArgs(argssecond, func() error {
-			return cmdAdd(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient), secondCNIVersion)
+			return cmdAdd(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient), secondCNIVersion)
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// fmt.Printf("!bang raw: %s\n", raw)
@@ -1345,24 +1343,25 @@ var _ = Describe("Whereabouts operations", func() {
 
 		// Release the IP, first range
 		err = testutils.CmdDelWithArgs(args, func() error {
-			return cmdDel(args, mutateK8sIPAM(args.ContainerID, ipamConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, ipamConf, wbClient))
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Release the IP, second range
 		err = testutils.CmdDelWithArgs(argssecond, func() error {
-			return cmdDel(argssecond, mutateK8sIPAM(argssecond.ContainerID, secondIPAMConf, wbClient))
+			return cmdDel(mutateK8sIPAM(args.ContainerID, ifname, secondIPAMConf, wbClient))
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
+
 })
 
 func cniArgs(podNamespace string, podName string) string {
 	return fmt.Sprintf("IgnoreUnknown=1;K8S_POD_NAMESPACE=%s;K8S_POD_NAME=%s", podNamespace, podName)
 }
 
-func newK8sIPAM(containerID string, ipamConf *whereaboutstypes.IPAMConfig, k8sCoreClient k8sclient.Interface, wbClient wbclientset.Interface) *kubernetes.KubernetesIPAM {
-	k8sIPAM, err := kubernetes.NewKubernetesIPAMWithNamespace(containerID, *ipamConf, ipamConf.PodNamespace)
+func newK8sIPAM(containerID, ifName string, ipamConf *whereaboutstypes.IPAMConfig, k8sCoreClient k8sclient.Interface, wbClient wbclientset.Interface) *kubernetes.KubernetesIPAM {
+	k8sIPAM, err := kubernetes.NewKubernetesIPAMWithNamespace(containerID, ifName, *ipamConf, ipamConf.PodNamespace)
 	if err != nil {
 		return nil
 	}
@@ -1370,8 +1369,8 @@ func newK8sIPAM(containerID string, ipamConf *whereaboutstypes.IPAMConfig, k8sCo
 	return k8sIPAM
 }
 
-func mutateK8sIPAM(containerID string, ipamConf *whereaboutstypes.IPAMConfig, client kubernetes.Client) *kubernetes.KubernetesIPAM {
-	k8sIPAM, err := kubernetes.NewKubernetesIPAMWithNamespace(containerID, *ipamConf, ipamConf.PodNamespace)
+func mutateK8sIPAM(containerID, ifName string, ipamConf *whereaboutstypes.IPAMConfig, client kubernetes.Client) *kubernetes.KubernetesIPAM {
+	k8sIPAM, err := kubernetes.NewKubernetesIPAMWithNamespace(containerID, ifName, *ipamConf, ipamConf.PodNamespace)
 	if err != nil {
 		return nil
 	}
@@ -1388,7 +1387,7 @@ func mustCIDR(s string) net.IPNet {
 	return *n
 }
 
-func ipamConfig(podName string, namespace string, ipRange string, gw string, kubeconfigPath string) *whereaboutstypes.IPAMConfig {
+func ipamConfig(podName, namespace, networkName, ipRange, gw, kubeconfigPath string) *whereaboutstypes.IPAMConfig {
 	const (
 		cniVersion = "0.3.1"
 		netName    = "net1"
@@ -1405,6 +1404,7 @@ func ipamConfig(podName string, namespace string, ipRange string, gw string, kub
 		Kubernetes: whereaboutstypes.KubernetesConfig{
 			KubeConfigPath: kubeconfigPath,
 		},
+		NetworkName: networkName,
 	}
 	bytes, err := json.Marshal(&whereaboutstypes.Net{
 		Name:       netName,
@@ -1452,7 +1452,7 @@ users:
 `)
 }
 
-func ipPool(ipRange string, namespace string, podReferences ...string) *v1alpha1.IPPool {
+func ipPool(ipRange string, namespace string, podReferences ...whereaboutstypes.IPReservation) *v1alpha1.IPPool {
 	return &v1alpha1.IPPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            kubernetes.NormalizeRange(ipRange),
@@ -1466,12 +1466,13 @@ func ipPool(ipRange string, namespace string, podReferences ...string) *v1alpha1
 	}
 }
 
-func allocations(podReferences ...string) map[string]v1alpha1.IPAllocation {
+func allocations(podReferences ...whereaboutstypes.IPReservation) map[string]v1alpha1.IPAllocation {
 	poolAllocations := map[string]v1alpha1.IPAllocation{}
-	for i, podRef := range podReferences {
-		poolAllocations[fmt.Sprintf("%d", i)] = v1alpha1.IPAllocation{
+	for i, r := range podReferences {
+		poolAllocations[fmt.Sprintf("%d", i+1)] = v1alpha1.IPAllocation{
 			ContainerID: "",
-			PodRef:      podRef,
+			PodRef:      r.PodRef,
+			IfName:      r.IfName,
 		}
 	}
 	return poolAllocations

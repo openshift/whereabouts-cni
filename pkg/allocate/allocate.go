@@ -23,12 +23,25 @@ func (a AssignmentError) Error() string {
 }
 
 // AssignIP assigns an IP using a range and a reserve list.
-func AssignIP(ipamConf types.RangeConfiguration, reservelist []types.IPReservation, containerID string, podRef string) (net.IPNet, []types.IPReservation, error) {
+func AssignIP(ipamConf types.RangeConfiguration, reservelist []types.IPReservation, containerID, podRef, ifName string) (net.IPNet, []types.IPReservation, error) {
 
 	// Setup the basics here.
 	_, ipnet, _ := net.ParseCIDR(ipamConf.Range)
 
-	newip, updatedreservelist, err := IterateForAssignment(*ipnet, ipamConf.RangeStart, ipamConf.RangeEnd, reservelist, ipamConf.OmitRanges, containerID, podRef)
+	// Verify if podRef and ifName have already an allocation.
+	for i, r := range reservelist {
+		if r.PodRef == podRef && r.IfName == ifName {
+			logging.Debugf("IP already allocated for podRef: %q - ifName:%q - IP: %s", podRef, ifName, r.IP.String())
+			if r.ContainerID != containerID {
+				logging.Debugf("updating container ID: %q", containerID)
+				reservelist[i].ContainerID = containerID
+			}
+
+			return net.IPNet{IP: r.IP, Mask: ipnet.Mask}, reservelist, nil
+		}
+	}
+
+	newip, updatedreservelist, err := IterateForAssignment(*ipnet, ipamConf.RangeStart, ipamConf.RangeEnd, reservelist, ipamConf.OmitRanges, containerID, podRef, ifName)
 	if err != nil {
 		return net.IPNet{}, nil, err
 	}
@@ -36,46 +49,27 @@ func AssignIP(ipamConf types.RangeConfiguration, reservelist []types.IPReservati
 	return net.IPNet{IP: newip, Mask: ipnet.Mask}, updatedreservelist, nil
 }
 
-// DeallocateIP assigns an IP using a range and a reserve list.
-func DeallocateIP(reservelist []types.IPReservation, containerID string) ([]types.IPReservation, net.IP, error) {
-
-	updatedreservelist, hadip, err := IterateForDeallocation(reservelist, containerID, getMatchingIPReservationIndex)
-	if err != nil {
-		return nil, nil, err
+// DeallocateIP removes allocation from reserve list. Returns the updated reserve list and the deallocated IP.
+func DeallocateIP(reservelist []types.IPReservation, containerID string) ([]types.IPReservation, net.IP) {
+	index := getMatchingIPReservationIndex(reservelist, containerID)
+	if index < 0 {
+		// Allocation not found. Return the original reserve list and nil IP.
+		return reservelist, nil
 	}
 
-	logging.Debugf("Deallocating given previously used IP: %v", hadip)
+	ip := reservelist[index].IP
+	logging.Debugf("Deallocating given previously used IP: %v", ip.String())
 
-	return updatedreservelist, hadip, nil
-}
-
-// IterateForDeallocation iterates overs currently reserved IPs and the deallocates given the container id.
-func IterateForDeallocation(
-	reservelist []types.IPReservation,
-	containerID string,
-	matchingFunction func(reservation []types.IPReservation, id string) int) ([]types.IPReservation, net.IP, error) {
-
-	foundidx := matchingFunction(reservelist, containerID)
-	// Check if it's a valid index
-	if foundidx < 0 {
-		return reservelist, nil, fmt.Errorf("did not find reserved IP for container %v", containerID)
-	}
-
-	returnip := reservelist[foundidx].IP
-
-	updatedreservelist := removeIdxFromSlice(reservelist, foundidx)
-	return updatedreservelist, returnip, nil
+	return removeIdxFromSlice(reservelist, index), ip
 }
 
 func getMatchingIPReservationIndex(reservelist []types.IPReservation, id string) int {
-	foundidx := -1
 	for idx, v := range reservelist {
 		if v.ContainerID == id {
-			foundidx = idx
-			break
+			return idx
 		}
 	}
-	return foundidx
+	return -1
 }
 
 func removeIdxFromSlice(s []types.IPReservation, i int) []types.IPReservation {
@@ -181,7 +175,7 @@ func IPAddOffset(ip net.IP, offset uint64) net.IP {
 }
 
 // IterateForAssignment iterates given an IP/IPNet and a list of reserved IPs
-func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reserveList []types.IPReservation, excludeRanges []string, containerID string, podRef string) (net.IP, []types.IPReservation, error) {
+func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, reserveList []types.IPReservation, excludeRanges []string, containerID, podRef, ifName string) (net.IP, []types.IPReservation, error) {
 	firstIP := rangeStart.To16()
 	var lastIP net.IP
 	if rangeEnd != nil {
@@ -247,8 +241,8 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 		performedassignment = true
 
 		assignedip = i
-		logging.Debugf("Reserving IP: |%v|", assignedip.String()+" "+containerID)
-		reserveList = append(reserveList, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef})
+		logging.Debugf("Reserving IP: %q - container ID %q - podRef: %q - ifName: %q", assignedip.String(), containerID, podRef, ifName)
+		reserveList = append(reserveList, types.IPReservation{IP: assignedip, ContainerID: containerID, PodRef: podRef, IfName: ifName})
 		break
 	}
 
