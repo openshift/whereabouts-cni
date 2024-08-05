@@ -42,7 +42,7 @@ func TestAPIs(t *testing.T) {
 		[]Reporter{})
 }
 
-func AllocateAndReleaseAddressesTest(ipRange string, gw string, kubeconfigPath string, expectedAddresses []string) {
+func AllocateAndReleaseAddressesTest(ipVersion string, ipRange string, gw string, kubeconfigPath string, expectedAddresses []string) {
 	const (
 		ifname          = "eth0"
 		nspath          = "/some/where"
@@ -152,6 +152,7 @@ var _ = Describe("Whereabouts operations", func() {
 	})
 
 	It("returns a previously allocated IP", func() {
+		ipVersion := "4"
 		ipamNetworkName := ""
 		cniVersion := "0.3.1"
 
@@ -193,26 +194,30 @@ var _ = Describe("Whereabouts operations", func() {
 
 		ExpectWithOffset(1, *result.IPs[0]).To(Equal(
 			current.IPConfig{
+				Version: ipVersion,
 				Address: mustCIDR(expectedAddress),
 				Gateway: ipamConf.Gateway,
 			}))
 	})
 
 	It("allocates and releases addresses on ADD/DEL", func() {
+		ipVersion := "4"
 		ipRange := "192.168.1.0/24"
 		ipGateway := "192.168.10.1"
 		expectedAddress := "192.168.1.1/24"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 
+		ipVersion = "6"
 		ipRange = "2001::1/116"
 		ipGateway = "2001::f:1"
 		expectedAddress = "2001::1/116"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases addresses on ADD/DEL with a Kubernetes backend", func() {
+		ipVersion := "4"
 		ipRange := "192.168.1.11-192.168.1.23/24"
 		ipGateway := "192.168.10.1"
 
@@ -231,43 +236,47 @@ var _ = Describe("Whereabouts operations", func() {
 			"192.168.1.22/24",
 		}
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, expectedAddresses)
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, expectedAddresses)
 
+		ipVersion = "6"
 		ipRange = "2001::1/116"
 		ipGateway = "2001::f:1"
 		expectedAddress := "2001::1/116"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases an IPv6 address with left-hand zeroes on ADD/DEL with a Kubernetes backend", func() {
+		ipVersion := "6"
 		ipRange := "fd::1/116"
 		ipGateway := "fd::f:1"
 		expectedAddress := "fd::1/116"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates and releases an IPv6 range that ends with zeroes with a Kubernetes backend", func() {
+		ipVersion := "6"
 		ipRange := "2001:db8:480:603d:0304:0403:000:0000-2001:db8:480:603d:0304:0403:0000:0004/64"
 		ipGateway := "2001:db8:480:603d::1"
 		expectedAddress := "2001:db8:480:603d:0304:0403:000:0000/64"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 
 		ipRange = "2001:db8:5422:0005::-2001:db8:5422:0005:7fff:ffff:ffff:ffff/64"
 		ipGateway = "2001:db8:5422:0005::1"
 		expectedAddress = "2001:db8:5422:0005::1/64"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("allocates IPv6 addresses with DNS-1123 conformant naming with a Kubernetes backend", func() {
+		ipVersion := "6"
 		ipRange := "fd00:0:0:10:0:0:3:1-fd00:0:0:10:0:0:3:6/64"
 		ipGateway := "2001::f:1"
 		expectedAddress := "fd00:0:0:10:0:0:3:1/64"
 
-		AllocateAndReleaseAddressesTest(ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
+		AllocateAndReleaseAddressesTest(ipVersion, ipRange, ipGateway, kubeConfigPath, []string{expectedAddress})
 	})
 
 	It("excludes a range of addresses", func() {
