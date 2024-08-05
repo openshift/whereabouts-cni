@@ -618,7 +618,7 @@ var _ = Describe("Whereabouts functionality", func() {
 
 					By("increasing replica count")
 					Expect(clientInfo.ScaleStatefulSet(serviceName, namespace, 1)).To(Succeed())
-					err = wbtestclient.WaitForStatefulSetCondition(context.Background(), clientInfo.Client, namespace, serviceName, replicaNumber, 1*time.Minute, wbtestclient.IsStatefulSetReadyPredicate)
+					err = wbtestclient.WaitForStatefulSetCondition(clientInfo.Client, namespace, serviceName, replicaNumber, 1*time.Minute, wbtestclient.IsStatefulSetReadyPredicate)
 					Expect(err).NotTo(HaveOccurred())
 
 					By("getting pod info")
