@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -591,6 +592,10 @@ var _ = Describe("Whereabouts functionality", func() {
 				It("can reclaim the previously allocated IPs", func() {
 					By("checking that the IP allocation is removed when the pod is deleted")
 					Expect(clientInfo.ScaleStatefulSet(serviceName, namespace, -1)).To(Succeed())
+
+					const podDeleteTimeout = 20 * time.Second
+					err := wbtestclient.WaitForPodToDisappear(clientInfo.Client, namespace, podName, podDeleteTimeout)
+					Expect(err).NotTo(HaveOccurred())
 					verifyNoAllocationsForPodRef(clientInfo, rangeWithTwoIPs, namespace, podName, secondaryIPs)
 
 					By("adding previous allocations")
@@ -618,7 +623,7 @@ var _ = Describe("Whereabouts functionality", func() {
 
 					By("increasing replica count")
 					Expect(clientInfo.ScaleStatefulSet(serviceName, namespace, 1)).To(Succeed())
-					err = wbtestclient.WaitForStatefulSetCondition(context.Background(), clientInfo.Client, namespace, serviceName, replicaNumber, 1*time.Minute, wbtestclient.IsStatefulSetReadyPredicate)
+					err = wbtestclient.WaitForStatefulSetCondition(clientInfo.Client, namespace, serviceName, replicaNumber, 1*time.Minute, wbtestclient.IsStatefulSetReadyPredicate)
 					Expect(err).NotTo(HaveOccurred())
 
 					By("getting pod info")
@@ -888,6 +893,11 @@ func allocationForPodRef(podRef string, ipPool v1alpha1.IPPool) []v1alpha1.IPAll
 			allocations = append(allocations, allocation)
 		}
 	}
+
+	sort.Slice(allocations, func(i, j int) bool {
+		return allocations[i].IfName < allocations[j].IfName
+	})
+
 	return allocations
 }
 
