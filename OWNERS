@@ -1,22 +1,21 @@
 reviewers:
   - aneeshkp
   - dougbtv
-  - dcbw
-  - squeed
   - zshi-redhat
   - fepan
   - s1061123
   - maiqueb
-  - nicklesimba
+  - bpickard22
+  - pliurh
 approvers:
   - aneeshkp
   - dougbtv
-  - dcbw
-  - squeed
   - zshi-redhat
   - fepan
   - s1061123
   - maiqueb
+  - bpickard22
+  - pliurh
 component: "Networking"
 subcomponent: "multus"
 
