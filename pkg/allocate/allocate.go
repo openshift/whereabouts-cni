@@ -50,8 +50,8 @@ func AssignIP(ipamConf types.RangeConfiguration, reservelist []types.IPReservati
 }
 
 // DeallocateIP removes allocation from reserve list. Returns the updated reserve list and the deallocated IP.
-func DeallocateIP(reservelist []types.IPReservation, containerID string) ([]types.IPReservation, net.IP) {
-	index := getMatchingIPReservationIndex(reservelist, containerID)
+func DeallocateIP(reservelist []types.IPReservation, containerID, ifName string) ([]types.IPReservation, net.IP) {
+	index := getMatchingIPReservationIndex(reservelist, containerID, ifName)
 	if index < 0 {
 		// Allocation not found. Return the original reserve list and nil IP.
 		return reservelist, nil
@@ -63,9 +63,9 @@ func DeallocateIP(reservelist []types.IPReservation, containerID string) ([]type
 	return removeIdxFromSlice(reservelist, index), ip
 }
 
-func getMatchingIPReservationIndex(reservelist []types.IPReservation, id string) int {
+func getMatchingIPReservationIndex(reservelist []types.IPReservation, id, ifName string) int {
 	for idx, v := range reservelist {
-		if v.ContainerID == id {
+		if v.ContainerID == id && v.IfName == ifName {
 			return idx
 		}
 	}
@@ -91,7 +91,7 @@ func IterateForAssignment(ipnet net.IPNet, rangeStart net.IP, rangeEnd net.IP, r
 		return net.IP{}, reserveList, err
 	}
 	logging.Debugf("IterateForAssignment input >> range_start: %v | range_end: %v | ipnet: %v | first IP: %v | last IP: %v",
-		rangeStart, rangeEnd, ipnet, firstIP, lastIP)
+		rangeStart, rangeEnd, ipnet.String(), firstIP, lastIP)
 
 	// Build reserved map.
 	reserved := make(map[string]bool)
