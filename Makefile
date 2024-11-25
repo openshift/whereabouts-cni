@@ -9,6 +9,9 @@ COMPUTE_NODES ?= 2
 
 OCI_BIN ?= docker
 
+USE_STATIC_CHECK ?= true
+
+
 build:
 	hack/build-go.sh
 
@@ -23,10 +26,13 @@ install-tools:
 	hack/install-kubebuilder-tools.sh
 
 test: build install-tools
-	hack/test-go.sh
+	hack/test-go.sh -u $(USE_STATIC_CHECK)
 
 kind:
 	hack/e2e-setup-kind-cluster.sh -n $(COMPUTE_NODES)
+
+upstream-test: build
+	hack/test-go.sh -u $(false)
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
