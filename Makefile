@@ -26,8 +26,13 @@ install-tools:
 test: build install-tools
 	hack/test-go.sh 
 
-test-skip-static: build
+test-skip-static: build 
 	hack/test-go.sh --skip-static-check 
+
+test-e2e:
+	./run-e2e.sh
+
+test-all: test-skip-static test-e2e
 
 kind:
 	hack/e2e-setup-kind-cluster.sh -n $(COMPUTE_NODES)
