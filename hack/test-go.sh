@@ -3,6 +3,11 @@
 # without cache: go test -count=1 -v ./pkg/storage/
 set -eox pipefail
 
+#temp just for testing
+echo "Starting Test"
+echo "go path ($GOPATH)"
+echo "go root ($GOROOT)"
+
 GO=${GO:-go}
 SKIP_STATIC_CHECK=$false
 #parse args
