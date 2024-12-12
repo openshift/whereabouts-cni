@@ -51,6 +51,12 @@ VERSION_LDFLAGS="-X github.com/k8snetworkplumbingwg/whereabouts/pkg/version.Vers
 -X github.com/k8snetworkplumbingwg/whereabouts/pkg/version.ReleaseStatus=${RELEASE_STATUS}"
 GLDFLAGS="${GLDFLAGS} ${VERSION_LDFLAGS}"
 
+
+
+CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/${cmd} cmd/${cmd}.go
+CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/ip-control-loop cmd/controlloop/*.go
+CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/node-slice-controller cmd/nodeslicecontroller/*.go
+
 echo "Current working directory: $(pwd)"
 echo "Golang version: $(go version)"
 echo "GOPATH: ${GOPATH:-not set}"
@@ -59,11 +65,7 @@ echo "GOROOT: ${GOROOT:-not set}"
 echo "Environment PATH: $PATH"
 echo "Modules download directory: $(go env GOPATH)/pkg/mod"
 echo "Listing /go/src/github.com/k8snetworkplumbingwg/whereabouts"
-ls -al /go/src/github.com/k8snetworkplumbingwg/whereabouts
-
-CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/${cmd} cmd/${cmd}.go
-CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/ip-control-loop cmd/controlloop/*.go
-CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} ${GO} build ${GOFLAGS} -ldflags "${GLDFLAGS}" -o bin/node-slice-controller cmd/nodeslicecontroller/*.go
+ls /path/ || true
 
 #temp just for testing
 echo "Done With Build"
