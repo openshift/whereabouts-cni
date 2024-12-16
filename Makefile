@@ -26,7 +26,7 @@ install-tools:
 test: build install-tools
 	hack/test-go.sh 
 
-test-skip-static: build
+test-skip-static: 
 	hack/test-go.sh --skip-static-check 
 
 kind:
