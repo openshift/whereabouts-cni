@@ -24,19 +24,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "Running go vet ..."
-${GO} vet --tags=test ./cmd/... ./pkg/...
+
 
 BASEDIR=$(pwd)
 
 if [ $SKIP_STATIC_CHECK ]
 then
     echo "Skipped golang staticcheck"
+    echo "Skipped go vet"
 else
   echo "Installing golang staticcheck ..."
   GOBIN=${BASEDIR}/bin go install honnef.co/go/tools/cmd/staticcheck@latest
   echo "Running golang staticcheck ..."
   ${BASEDIR}/bin/staticcheck --tags=test ./...
+
+  echo "Running go vet ..."
+  ${GO} vet --tags=test ./cmd/... ./pkg/...
 fi
 
 echo "Running go tests..."
