@@ -17,7 +17,7 @@ case "${ID}" in
 	rhcos|scos)
 		rhelmajor=$(echo ${RHEL_VERSION} | cut -f 1 -d .)
 		;;
-	rhel)
+	rhel|centos)
 		rhelmajor=$(echo "${VERSION_ID}" | cut -f 1 -d .)
 		;;
 	fedora)
