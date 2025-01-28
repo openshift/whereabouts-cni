@@ -19,6 +19,7 @@ import (
 
 func cmdAddFunc(args *skel.CmdArgs) error {
 	ipamConf, confVersion, err := config.LoadIPAMConfig(args.StdinData, args.Args)
+        logging.Debugf("foobar")
 	if err != nil {
 		logging.Errorf("IPAM configuration load failed: %s", err)
 		return err
