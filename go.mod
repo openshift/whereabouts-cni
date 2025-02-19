@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	github.com/blang/semver v3.5.1+incompatible
-	github.com/containernetworking/cni v1.2.0
+	github.com/containernetworking/cni v1.2.3
 	github.com/containernetworking/plugins v1.5.0
 	github.com/imdario/mergo v0.3.16
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -54,13 +54,13 @@ require (
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/net v0.24.0 // indirect
+	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect
 	golang.org/x/sys v0.20.0 // indirect
-	golang.org/x/term v0.19.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/term v0.20.0 // indirect
+	golang.org/x/text v0.15.0 // indirect
 	golang.org/x/time v0.3.0
-	golang.org/x/tools v0.20.0 // indirect
+	golang.org/x/tools v0.21.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
