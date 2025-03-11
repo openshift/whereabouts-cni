@@ -23,6 +23,7 @@ RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel9/bin && \
        mkdir -p /usr/src/whereabouts/rhel8/bin
+COPY --from=rhel8 /go/src/github.com/openshift/whereabouts/entrypoint.sh       /usr/src/whereabouts/bin
 COPY --from=rhel8 /go/src/github.com/openshift/whereabouts/bin/whereabouts     /usr/src/whereabouts/bin
 COPY --from=rhel8 /go/src/github.com/openshift/whereabouts/bin/ip-control-loop /usr/src/whereabouts/bin
 COPY --from=rhel8 /go/src/github.com/openshift/whereabouts/bin/node-slice-controller /usr/src/whereabouts/bin
