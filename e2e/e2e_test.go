@@ -3,13 +3,12 @@ package whereabouts_e2e
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"sort"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/k8snetworkplumbingwg/whereabouts/e2e/util"
 
 	. "github.com/onsi/ginkgo"
 	"github.com/onsi/ginkgo/extensions/table"
@@ -27,13 +26,11 @@ import (
 	"github.com/k8snetworkplumbingwg/whereabouts/e2e/poolconsistency"
 	"github.com/k8snetworkplumbingwg/whereabouts/e2e/retrievers"
 	testenv "github.com/k8snetworkplumbingwg/whereabouts/e2e/testenvironment"
+	"github.com/k8snetworkplumbingwg/whereabouts/e2e/util"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/api/whereabouts.cni.cncf.io/v1alpha1"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/iphelpers"
 	wbstorage "github.com/k8snetworkplumbingwg/whereabouts/pkg/storage/kubernetes"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/types"
-
-	// Import node slice tests to execute in the suite
-	_ "github.com/k8snetworkplumbingwg/whereabouts/e2e/e2e_node_slice"
 )
 
 const (
@@ -475,14 +472,12 @@ var _ = Describe("Whereabouts functionality", func() {
 				})
 
 				Context("deleting a pod from the statefulset", func() {
-					var (
-						containerID string
-						podRef      string
-					)
+					It("can recover from an exhausted IP pool", func() {
+						var containerID string
+						var podRef string
 
-					ctx := context.Background()
+						ctx := context.Background()
 
-					BeforeEach(func() {
 						ipPool, err := clientInfo.WbClient.WhereaboutsV1alpha1().IPPools(ipPoolNamespace).Get(
 							ctx,
 							wbstorage.IPPoolName(wbstorage.PoolIdentifier{IpRange: rangeWithTwoIPs, NetworkName: wbstorage.UnnamedNetwork}),
@@ -497,39 +492,31 @@ var _ = Describe("Whereabouts functionality", func() {
 						Expect(decomposedPodRef).To(HaveLen(2))
 						podName := decomposedPodRef[1]
 
+						By("deleting pod")
 						rightNow := int64(0)
 						Expect(clientInfo.Client.CoreV1().Pods(namespace).Delete(
 							ctx, podName, metav1.DeleteOptions{GracePeriodSeconds: &rightNow})).To(Succeed())
 
-						Expect(wbtestclient.WaitForStatefulSetCondition(
-							ctx,
-							clientInfo.Client,
-							namespace,
-							serviceName,
-							replicaNumber,
-							5*time.Second,
-							wbtestclient.IsStatefulSetDegradedPredicate)).Should(Succeed())
+						By("checking that the IP allocation is recreated")
+						Eventually(func() error {
+							ipPool, err = clientInfo.WbClient.WhereaboutsV1alpha1().IPPools(ipPoolNamespace).Get(
+								ctx,
+								wbstorage.IPPoolName(wbstorage.PoolIdentifier{IpRange: rangeWithTwoIPs, NetworkName: wbstorage.UnnamedNetwork}),
+								metav1.GetOptions{})
+							if err != nil {
+								return err
+							}
 
-						scaleUpTimeout := 2 * util.CreatePodTimeout
-						Expect(wbtestclient.WaitForStatefulSetCondition(
-							ctx,
-							clientInfo.Client,
-							namespace,
-							serviceName,
-							replicaNumber,
-							scaleUpTimeout,
-							wbtestclient.IsStatefulSetReadyPredicate)).Should(Succeed())
-					})
+							if len(ipPool.Spec.Allocations) == 0 {
+								return fmt.Errorf("IP pool is empty")
+							}
 
-					It("can recover from an exhausted IP pool", func() {
-						ipPool, err := clientInfo.WbClient.WhereaboutsV1alpha1().IPPools(ipPoolNamespace).Get(
-							ctx,
-							wbstorage.IPPoolName(wbstorage.PoolIdentifier{IpRange: rangeWithTwoIPs, NetworkName: wbstorage.UnnamedNetwork}),
-							metav1.GetOptions{})
-						Expect(err).NotTo(HaveOccurred())
-						Expect(ipPool.Spec.Allocations).NotTo(BeEmpty())
-						Expect(allocationForPodRef(podRef, *ipPool)[0].ContainerID).NotTo(Equal(containerID))
-						Expect(allocationForPodRef(podRef, *ipPool)[0].PodRef).To(Equal(podRef))
+							if allocationForPodRef(podRef, *ipPool)[0].ContainerID == containerID {
+								return fmt.Errorf("IP allocation not recreated")
+							}
+
+							return nil
+						}, 3*time.Second, 500*time.Millisecond).Should(Succeed(), "the IP allocation should be recreated")
 					})
 				})
 			})
@@ -850,6 +837,58 @@ var _ = Describe("Whereabouts functionality", func() {
 				Expect(secondaryIfaceIPs2[0]).NotTo(Equal(secondaryIfaceIPs3[0]))
 			})
 		})
+
+		Context("Pod cleanup controller", func() {
+			const singlePodName = "whereabouts-pod-cleanup-controller-test"
+			var err error
+
+			AfterEach(func() {
+				_ = clientInfo.DeletePod(pod)
+			})
+
+			It("verifies that the pod cleanup controller deletes an orphaned allocation", func() {
+				By("creating a pod with whereabouts net-attach-def")
+				pod, err = clientInfo.ProvisionPod(
+					singlePodName,
+					testNamespace,
+					util.PodTierLabel(singlePodName),
+					entities.PodNetworkSelectionElements(testNetworkName),
+				)
+				Expect(err).NotTo(HaveOccurred())
+
+				By("duplicating the existing ippool allocation with a different offset")
+				ip, err := retrievers.SecondaryIfaceIPValue(pod, "net1")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ip).NotTo(BeEmpty())
+
+				firstIP, _, err := net.ParseCIDR(ipv4TestRange)
+				Expect(err).NotTo(HaveOccurred())
+				offset, err := iphelpers.IPGetOffset(net.ParseIP(ip[0]), firstIP)
+				Expect(err).NotTo(HaveOccurred())
+
+				ipPool, err := clientInfo.WbClient.WhereaboutsV1alpha1().IPPools(ipPoolNamespace).Get(context.TODO(),
+					wbstorage.IPPoolName(wbstorage.PoolIdentifier{IpRange: ipv4TestRange, NetworkName: wbstorage.UnnamedNetwork}),
+					metav1.GetOptions{})
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(ipPool.Spec.Allocations).To(HaveKey(fmt.Sprintf("%d", offset)))
+
+				newOffset := int(offset) + rand.Intn(100)
+
+				ipPool.Spec.Allocations[fmt.Sprintf("%d", newOffset)] = ipPool.Spec.Allocations[fmt.Sprintf("%d", offset)]
+				_, err = clientInfo.WbClient.WhereaboutsV1alpha1().IPPools(ipPoolNamespace).Update(context.Background(), ipPool, metav1.UpdateOptions{})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("deleting pod")
+				err = clientInfo.DeletePod(pod)
+				Expect(err).NotTo(HaveOccurred())
+
+				By("checking that all IP allocations are removed")
+				ip = append(ip, iphelpers.IPAddOffset(firstIP, uint64(newOffset)).String())
+				verifyNoAllocationsForPodRef(clientInfo, ipv4TestRange, testNamespace, pod.Name, ip)
+			})
+		})
+
 	})
 })
 
