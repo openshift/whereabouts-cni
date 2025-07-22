@@ -1,4 +1,4 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.23-openshift-4.19 AS rhel9
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.24-openshift-4.20 AS rhel9
 ADD . /go/src/github.com/openshift/whereabouts
 WORKDIR /go/src/github.com/openshift/whereabouts
 ENV CGO_ENABLED=1
@@ -8,7 +8,7 @@ RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 RUN go build -mod vendor -o bin/node-slice-controller cmd/nodeslicecontroller/node_slice_controller.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.23-openshift-4.19 AS rhel8
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.24-openshift-4.20 AS rhel8
 ADD . /go/src/github.com/openshift/whereabouts
 WORKDIR /go/src/github.com/openshift/whereabouts
 ENV CGO_ENABLED=1
@@ -18,7 +18,7 @@ RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
 RUN go build -mod vendor -o bin/node-slice-controller cmd/nodeslicecontroller/node_slice_controller.go
 WORKDIR /
 
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-base-openshift-4.19
+FROM registry.ci.openshift.org/ocp/4.20:base-rhel9
 RUN mkdir -p /usr/src/whereabouts/images && \
        mkdir -p /usr/src/whereabouts/bin && \
        mkdir -p /usr/src/whereabouts/rhel9/bin && \

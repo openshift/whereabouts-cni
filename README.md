@@ -13,7 +13,7 @@ This repository here is used for distribution of Whereabouts as part of OpenShif
 
 If you have bugs, usage questions or otherwise with the [community distribution](https://github.com/dougbtv/whereabouts), please file issues there.
 
-Otherwise, please use your support channels to file issues with Whereabouts.
+Whereabouts takes an address range, like `192.168.2.0/24` in CIDR notation, and will assign IP addresses within that range. In this case, it will assign IP addresses from `192.168.2.1` to `192.168.2.254`. When an IP address is assigned to a pod, Whereabouts tracks that IP address in a data store for the lifetime of that pod. When the pod is removed, Whereabouts then frees the address and makes it available to assign on subsequent requests. Whereabouts always assigns the lowest value address that's available in the range.
 
 You can also specify ranges to exclude from assignment, so if for example you'd like to assign IP addresses within the range `192.168.2.0/24`, you can exclude IP addresses within it by adding them to an exclude list. For example, if you decide to exclude the range `192.168.2.0/28`, the first IP address assigned in the range will be `192.168.2.16`.
 
