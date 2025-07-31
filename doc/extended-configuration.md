@@ -21,7 +21,7 @@ The daemonset installation as shown on the README is for use with Kubernetes ver
 
 You can compile from this repo (with `./hack/build-go.sh`) and copy the resulting binary onto each node in the `/opt/cni/bin` directory (by default).
 
-Not that we're also including a Custom Resource Definition (CRD) to use the `kubernetes` datastore option. This installs the kubernetes CRD specification for the `ippools.whereabouts.cni.k8s.io/v1alpha1` type.
+Note that we're also including a Custom Resource Definition (CRD) to use the `kubernetes` datastore option. This installs the kubernetes CRD specification for the `ippools.whereabouts.cni.k8s.io/v1alpha1` type.
 
 ### Example etcd datastore configuration
 
