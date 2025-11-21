@@ -17,15 +17,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Install Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version-file: go.mod
 
     - name: Run Revive Action by building from repository
-      uses: morphy2k/revive-action@v2.7.7
+      uses: morphy2k/revive-action@v2.7.8
       with:
         exclude: "./vendor/..."
         name: "Revive"
@@ -64,10 +64,10 @@ jobs:
       NUMBER_OF_COMPUTE_NODES: 5
     steps:
       - name: Checkout code into the Go module directory
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go version
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -94,10 +94,10 @@ jobs:
       NUMBER_OF_COMPUTE_NODES: 5
     steps:
       - name: Checkout code into the Go module directory
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go version
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
