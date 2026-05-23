@@ -3,9 +3,9 @@ ADD . /go/src/github.com/openshift/whereabouts
 WORKDIR /go/src/github.com/openshift/whereabouts
 ENV CGO_ENABLED=1
 ENV GO111MODULE=on
-RUN go build -mod vendor -o bin/whereabouts     cmd/whereabouts.go
-RUN go build -mod vendor -o bin/ip-control-loop cmd/controlloop/controlloop.go
-RUN go build -mod vendor -o bin/node-slice-controller cmd/nodeslicecontroller/node_slice_controller.go
+RUN go build -mod vendor -ldflags '-s -w' -o bin/whereabouts     cmd/whereabouts.go
+RUN go build -mod vendor -ldflags '-s -w' -o bin/ip-control-loop cmd/controlloop/controlloop.go
+RUN go build -mod vendor -ldflags '-s -w' -o bin/node-slice-controller cmd/nodeslicecontroller/node_slice_controller.go
 WORKDIR /
 
 FROM registry.ci.openshift.org/ocp/4.20:base-rhel9
