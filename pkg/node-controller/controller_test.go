@@ -963,6 +963,35 @@ func TestTwoNetworksRangeAndSliceMismatch(t *testing.T) {
 	f.runExpectError(context.TODO(), getKey(nad2, t))
 }
 
+// TestEmptyNetworkNameDifferentRangesNoError verifies that two NADs with empty
+// network_name and different IP ranges are treated as independent networks.
+// Without the fix in checkIpamConfMatch, empty strings match ("" == "") and the
+// controller incorrectly reports an IPAM conf mismatch, blocking syncHandler.
+func TestEmptyNetworkNameDifferentRangesNoError(t *testing.T) {
+	f := newFixture(t)
+	nad1 := newNad("odf-cluster-nad", "", "192.168.7.0/26", "/28")
+	nad2 := newNad("odf-public-nad", "", "192.168.6.0/26", "/28")
+	node1 := newNode("node1")
+
+	f.nadLister = append(f.nadLister, nad1, nad2)
+	f.nadObjects = append(f.nadObjects, nad1, nad2)
+	f.nodeLister = append(f.nodeLister, node1)
+	f.kubeobjects = append(f.kubeobjects, node1)
+
+	nodeSlicePool := newNodeSlicePool("", "192.168.7.0/26", "/28",
+		v1alpha1.NodeSlicePoolStatus{
+			Allocations: []v1alpha1.NodeSliceAllocation{
+				{NodeName: "node1", SliceRange: "192.168.7.0/28"},
+				{NodeName: "", SliceRange: "192.168.7.16/28"},
+				{NodeName: "", SliceRange: "192.168.7.32/28"},
+				{NodeName: "", SliceRange: "192.168.7.48/28"},
+			},
+		}, nad1)
+	f.expectNodeSlicePoolCreateAction(nodeSlicePool)
+
+	f.run(context.TODO(), getKey(nad1, t))
+}
+
 func getKey(nad *k8snetplumbersv1.NetworkAttachmentDefinition, t *testing.T) string {
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(nad)
 	if err != nil {

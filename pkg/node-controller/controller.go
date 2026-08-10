@@ -537,7 +537,7 @@ func (c *Controller) checkForMultiNadMismatch(name, namespace string) error {
 }
 
 func checkIpamConfMatch(conf1, conf2 *types.IPAMConfig) bool {
-	if conf1.NetworkName == conf2.NetworkName {
+	if conf1.NetworkName != "" && conf1.NetworkName == conf2.NetworkName {
 		return conf1.IPRanges[0].Range == conf2.IPRanges[0].Range && conf1.NodeSliceSize == conf2.NodeSliceSize
 	}
 	return true
