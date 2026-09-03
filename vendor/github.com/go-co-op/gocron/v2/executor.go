@@ -56,6 +56,8 @@ type executor struct {
 	monitor Monitor
 	// monitorStatus for reporting metrics
 	monitorStatus MonitorStatus
+	// reference to parent scheduler for lifecycle notifications
+	scheduler *scheduler
 }
 
 type jobIn struct {
@@ -155,6 +157,15 @@ func (e *executor) start() {
 							// all runners are busy, reschedule the work for later
 							// which means we just skip it here and do nothing
 							// TODO when metrics are added, this should increment a rescheduled metric
+							// Notify concurrency limit reached if monitor is configured
+							if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+								ctx2, cancel2 := context.WithCancel(executorCtx)
+								job := requestJobCtx(ctx2, jIn.id, e.jobOutRequest)
+								cancel2()
+								if job != nil {
+									e.scheduler.notifyConcurrencyLimitReached("limit", e.scheduler.jobFromInternalJob(*job))
+								}
+							}
 							e.sendOutForRescheduling(&jIn)
 						}
 					} else {
@@ -200,17 +211,27 @@ func (e *executor) start() {
 							select {
 							case runner.rescheduleLimiter <- struct{}{}:
 								runner.in <- jIn
-								e.sendOutForRescheduling(&jIn)
+								// For intervalFromCompletion, skip rescheduling here - it will happen after job completes
+								if !j.intervalFromCompletion {
+									e.sendOutForRescheduling(&jIn)
+								}
 							default:
 								// runner is busy, reschedule the work for later
 								// which means we just skip it here and do nothing
 								e.incrementJobCounter(*j, SingletonRescheduled)
 								e.sendOutForRescheduling(&jIn)
+								// Notify concurrency limit reached if monitor is configured
+								if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+									e.scheduler.notifyConcurrencyLimitReached("singleton", e.scheduler.jobFromInternalJob(*j))
+								}
 							}
 						} else {
 							// wait mode, fill up that queue (buffered channel, so it's ok)
 							runner.in <- jIn
-							e.sendOutForRescheduling(&jIn)
+							// For intervalFromCompletion, skip rescheduling here - it will happen after job completes
+							if !j.intervalFromCompletion {
+								e.sendOutForRescheduling(&jIn)
+							}
 						}
 					} else {
 						select {
@@ -345,7 +366,10 @@ func (e *executor) singletonModeRunner(name string, in chan jobIn, wg *waitGroup
 				// need to set shouldSendOut = false here, as there is a duplicative call to sendOutForRescheduling
 				// inside the runJob function that needs to be skipped. sendOutForRescheduling is previously called
 				// when the job is sent to the singleton mode runner.
-				jIn.shouldSendOut = false
+				// Exception: for intervalFromCompletion, we want rescheduling to happen AFTER job completion
+				if !j.intervalFromCompletion {
+					jIn.shouldSendOut = false
+				}
 				e.runJob(*j, jIn)
 			}
 
@@ -407,22 +431,44 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 
 	_ = callJobFuncWithParams(j.beforeJobRuns, j.id, j.name)
 
+	//  Notify job started
+	actualStartTime := time.Now()
+	if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+		jobObj := e.scheduler.jobFromInternalJob(j)
+		e.scheduler.notifyJobStarted(jobObj)
+		// Notify scheduling delay if job had a scheduled time
+		if len(j.nextScheduled) > 0 {
+			e.scheduler.notifyJobSchedulingDelay(jobObj, j.nextScheduled[0], actualStartTime)
+		}
+	}
+
 	err := callJobFuncWithParams(j.beforeJobRunsSkipIfBeforeFuncErrors, j.id, j.name)
 	if err != nil {
 		e.sendOutForRescheduling(&jIn)
-
 		select {
 		case e.jobsOutCompleted <- j.id:
 		case <-e.ctx.Done():
 		}
-
+		// Notify job failed (before actual run)
+		if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+			e.scheduler.notifyJobFailed(e.scheduler.jobFromInternalJob(j), err)
+		}
 		return
 	}
 
-	e.sendOutForRescheduling(&jIn)
-	select {
-	case e.jobsOutCompleted <- j.id:
-	case <-e.ctx.Done():
+	// Notify job running
+	if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+		e.scheduler.notifyJobRunning(e.scheduler.jobFromInternalJob(j))
+	}
+
+	// For intervalFromCompletion, we need to reschedule AFTER the job completes,
+	// not before. For regular jobs, we reschedule before execution (existing behavior).
+	if !j.intervalFromCompletion {
+		e.sendOutForRescheduling(&jIn)
+		select {
+		case e.jobsOutCompleted <- j.id:
+		case <-e.ctx.Done():
+		}
 	}
 
 	startTime := time.Now()
@@ -435,11 +481,34 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 	if err != nil {
 		_ = callJobFuncWithParams(j.afterJobRunsWithError, j.id, j.name, err)
 		e.incrementJobCounter(j, Fail)
-		e.recordJobTimingWithStatus(startTime, time.Now(), j, Fail, err)
+		endTime := time.Now()
+		e.recordJobTimingWithStatus(startTime, endTime, j, Fail, err)
+		// Notify job failed
+		if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+			jobObj := e.scheduler.jobFromInternalJob(j)
+			e.scheduler.notifyJobFailed(jobObj, err)
+			e.scheduler.notifyJobExecutionTime(jobObj, endTime.Sub(startTime))
+		}
 	} else {
 		_ = callJobFuncWithParams(j.afterJobRuns, j.id, j.name)
 		e.incrementJobCounter(j, Success)
-		e.recordJobTimingWithStatus(startTime, time.Now(), j, Success, nil)
+		endTime := time.Now()
+		e.recordJobTimingWithStatus(startTime, endTime, j, Success, nil)
+		// Notify job completed
+		if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
+			jobObj := e.scheduler.jobFromInternalJob(j)
+			e.scheduler.notifyJobCompleted(jobObj)
+			e.scheduler.notifyJobExecutionTime(jobObj, endTime.Sub(startTime))
+		}
+	}
+
+	// For intervalFromCompletion, reschedule AFTER the job completes
+	if j.intervalFromCompletion {
+		select {
+		case e.jobsOutCompleted <- j.id:
+		case <-e.ctx.Done():
+		}
+		e.sendOutForRescheduling(&jIn)
 	}
 }
 

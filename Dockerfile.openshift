@@ -1,4 +1,4 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.24-openshift-4.20 AS rhel9
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.25-openshift-5.1 AS rhel9
 ADD . /go/src/github.com/openshift/whereabouts
 WORKDIR /go/src/github.com/openshift/whereabouts
 ENV CGO_ENABLED=1

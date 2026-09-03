@@ -5,6 +5,9 @@
 
 gocron is a job scheduling package which lets you run Go functions at pre-determined intervals.
 
+> Looking for a visual interface?  
+> Check out [**gocron-ui**](https://github.com/go-co-op/gocron-ui) — a lightweight web dashboard to monitor, trigger, and manage your `gocron` jobs in real time.
+
 If you want to chat, you can find us on Slack at
 [<img src="https://img.shields.io/badge/gophers-gocron-brightgreen?logo=slack">](https://gophers.slack.com/archives/CQ7T0T1FW)
 
@@ -71,6 +74,12 @@ func main() {
 - [Go doc examples](https://pkg.go.dev/github.com/go-co-op/gocron/v2#pkg-examples)
 - [Examples directory](examples)
 
+## Articles & Blog Posts
+
+Community articles and tutorials about using gocron:
+
+- [Building a dynamic, highly available scheduler in Go](https://tech.efg.gg/posts/2025/highly-available-scheduler-in-go/) - A deep dive into building a highly available scheduler using gocron, MongoDB change streams, and leader election patterns for the FACEIT Watch platform.
+
 ## Concepts
 
 - **Job**: The job encapsulates a "task", which is made up of a go function and any function parameters. The Job then
@@ -99,6 +108,15 @@ Jobs can be run every x weeks on specific days of the week and at specific times
 Jobs can be run every x months on specific days of the month and at specific times.
 - [**One time**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#OneTimeJob):
 Jobs can be run at specific time(s) (either once or many times).
+
+### Interval Timing
+Jobs can be scheduled with different interval timing modes.
+- [**Interval from scheduled time (default)**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#DurationJob):
+By default, jobs calculate their next run time from when they were scheduled to start, resulting in fixed intervals 
+regardless of execution time. Good for cron-like scheduling at predictable times.
+- [**Interval from completion time**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#WithIntervalFromCompletion):
+Jobs can calculate their next run time from when they complete, ensuring consistent rest periods between executions.
+Ideal for rate-limited APIs, resource-intensive jobs, and scenarios where execution time varies.
 
 ### Concurrency Limits
 Jobs can be limited individually or across the entire scheduler.
@@ -151,12 +169,61 @@ The Logger interface can be implemented with your desired logging library.
 The provided NewLogger uses the standard library's log package.
 
 ### Metrics
-Metrics may be collected from the execution of each job.
+Metrics may be collected from the execution of each job and scheduler lifecycle events.
 - [**Monitor**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#Monitor):
-- [**MonitorStatus**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#MonitorStatus) (includes status and error (if any) of the Job)
 A monitor can be used to collect metrics for each job from a scheduler.
-  - Implementations: [go-co-op monitors](https://github.com/go-co-op?q=-monitor&type=all&language=&sort=)
-    (don't see what you need? request on slack to get a repo created to contribute it!)
+  - Implementations: There are currently no open source implementations of the Monitor interface available.
+    We'd love for you to be the first to contribute one! Check out the [Monitor interface documentation](https://pkg.go.dev/github.com/go-co-op/gocron/v2#Monitor)
+    to get started, or reach out on [Slack](https://gophers.slack.com/archives/CQ7T0T1FW) if you'd like to discuss your implementation.
+- [**MonitorStatus**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#MonitorStatus):
+Extends Monitor with status and error tracking for each job.
+  - Implementations: There are currently no open source implementations of the MonitorStatus interface available.
+    We'd love for you to be the first to contribute one! Check out the [MonitorStatus interface documentation](https://pkg.go.dev/github.com/go-co-op/gocron/v2#MonitorStatus)
+    to get started, or reach out on [Slack](https://gophers.slack.com/archives/CQ7T0T1FW) if you'd like to discuss your implementation.
+- [**SchedulerMonitor**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#SchedulerMonitor):
+A scheduler monitor provides comprehensive observability into scheduler and job lifecycle events.
+
+  **Available Metrics:**
+  - **Scheduler Lifecycle**: `SchedulerStarted`, `SchedulerStopped`, `SchedulerShutdown`
+  - **Job Management**: `JobRegistered`, `JobUnregistered` - track jobs added/removed from scheduler
+  - **Job Execution**: `JobStarted`, `JobRunning`, `JobCompleted`, `JobFailed` - monitor job execution flow
+  - **Performance**: `JobExecutionTime`, `JobSchedulingDelay` - measure job duration and scheduling lag
+  - **Concurrency**: `ConcurrencyLimitReached` - detect when singleton or limit mode constraints are hit
+
+  **Derived Metrics** (calculable from events):
+  - Error rate: `JobFailed / (JobCompleted + JobFailed)`
+  - Average execution time: from `JobExecutionTime` events
+  - Active jobs: `JobRegistered - JobUnregistered`
+  - Current queue depth: `JobStarted - (JobCompleted + JobFailed)`
+
+  **Example - Prometheus Integration:**
+  ```go
+  type PrometheusMonitor struct {
+      jobsCompleted   prometheus.Counter
+      jobsFailed      prometheus.Counter
+      executionTime   prometheus.Histogram
+      schedulingDelay prometheus.Histogram
+  }
+
+  func (p *PrometheusMonitor) JobExecutionTime(job gocron.Job, duration time.Duration) {
+      p.executionTime.Observe(duration.Seconds())
+  }
+
+  func (p *PrometheusMonitor) JobSchedulingDelay(job gocron.Job, scheduled, actual time.Time) {
+      if delay := actual.Sub(scheduled); delay > 0 {
+          p.schedulingDelay.Observe(delay.Seconds())
+      }
+  }
+
+  // Initialize scheduler with monitor
+  s, _ := gocron.NewScheduler(gocron.WithSchedulerMonitor(monitor))
+  ```
+
+  **Use Cases:** Prometheus metrics, custom dashboards, alerting systems, performance monitoring
+
+  - Implementations: There are currently no open source implementations of the SchedulerMonitor interface available.
+    We'd love for you to be the first to contribute one! Check out the [SchedulerMonitor interface documentation](https://pkg.go.dev/github.com/go-co-op/gocron/v2#SchedulerMonitor)
+    to get started, or reach out on [Slack](https://gophers.slack.com/archives/CQ7T0T1FW) if you'd like to discuss your implementation.
 
 ### Testing
 The gocron library is set up to enable testing.

@@ -12,7 +12,6 @@ WHEREABOUTS_KUBECONFIG_LITERAL=$(echo "$WHEREABOUTS_KUBECONFIG" | sed -e s'|/hos
 
 SERVICE_ACCOUNT_PATH=/var/run/secrets/kubernetes.io/serviceaccount
 KUBE_CA_FILE=${KUBE_CA_FILE:-$SERVICE_ACCOUNT_PATH/ca.crt}
-SERVICE_ACCOUNT_TOKEN=$(cat $SERVICE_ACCOUNT_PATH/token)
 SERVICE_ACCOUNT_TOKEN_PATH=$SERVICE_ACCOUNT_PATH/token
 SKIP_TLS_VERIFY=${SKIP_TLS_VERIFY:-false}
 
@@ -35,7 +34,8 @@ function warn()
 
 function generateKubeConfig {
   # Check if we're running as a k8s pod.
-if [ -f "$SERVICE_ACCOUNT_PATH/token" ]; then
+if [ -f "$SERVICE_ACCOUNT_TOKEN_PATH" ]; then
+  SERVICE_ACCOUNT_TOKEN=$(cat $SERVICE_ACCOUNT_TOKEN_PATH)
   # We're running as a k8d pod - expect some variables.
   if [ -z ${KUBERNETES_SERVICE_HOST} ]; then
     error "KUBERNETES_SERVICE_HOST not set"; exit 1;
@@ -92,11 +92,19 @@ fi
 
 function generateWhereaboutsConf {
 
+  # configuration_path is the directory where whereabouts looks up the
+  # optional `nodename` file when resolving the current node's identity
+  # (see getNodeName in pkg/storage/kubernetes/ipam.go). We strip the
+  # leading /host so the path is correct from the on-host CNI invocation.
+  local WHEREABOUTS_CONF_DIR_LITERAL
+  WHEREABOUTS_CONF_DIR_LITERAL="${WHEREABOUTS_KUBECONFIG_LITERAL%/*}"
+
   touch $WHEREABOUTS_CONF_FILE
   chmod ${KUBECONFIG_MODE:-600} $WHEREABOUTS_CONF_FILE
   cat > $WHEREABOUTS_CONF_FILE <<EOF
 {
   "datastore": "kubernetes",
+  "configuration_path": "${WHEREABOUTS_CONF_DIR_LITERAL}",
   "kubernetes": {
     "kubeconfig": "${WHEREABOUTS_KUBECONFIG_LITERAL}"
   },
@@ -104,6 +112,26 @@ function generateWhereaboutsConf {
 }
 EOF
 
+}
+
+function generateNodeNameFile {
+
+  # Persist the Kubernetes node name (typically an FQDN) into a file the
+  # on-host whereabouts binary can read. Without this, getNodeName falls
+  # back to /etc/hostname, which on many distributions is the short
+  # hostname and does not match the name the kube-apiserver assigns to
+  # NodeSlicePool allocations -- which makes the on-node binary fail
+  # node-slice lookups with "no allocated node slice for node".
+  if [ -z "${NODENAME:-}" ]; then
+    warn "NODENAME not set; skipping nodename file generation"
+    return
+  fi
+
+  local WHEREABOUTS_NODENAME_FILE
+  WHEREABOUTS_NODENAME_FILE="$CNI_CONF_DIR/whereabouts.d/nodename"
+
+  printf '%s' "$NODENAME" > "$WHEREABOUTS_NODENAME_FILE"
+  chmod ${KUBECONFIG_MODE:-600} "$WHEREABOUTS_NODENAME_FILE"
 }
 
 function get_token_md5sum {
