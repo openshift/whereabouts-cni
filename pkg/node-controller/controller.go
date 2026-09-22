@@ -338,6 +338,12 @@ func (c *Controller) syncHandler(ctx context.Context, key string) error {
 	//nad does exist so did it change node_slice_range or slice_size
 	ipamConf, err := ipamConfiguration(nad, "")
 	if err != nil {
+		if config.IsIrrelevantNADError(err) {
+			logger.Info("skipping network-attachment-definition without whereabouts ipam",
+				"network-attachment-definition", klog.KRef(namespace, name),
+				"reason", err.Error())
+			return nil
+		}
 		return err
 	}
 
@@ -507,6 +513,9 @@ func (c *Controller) checkForMultiNadMismatch(name, namespace string) error {
 	}
 	ipamConf, err := ipamConfiguration(nad, "")
 	if err != nil {
+		if config.IsIrrelevantNADError(err) {
+			return nil
+		}
 		return err
 	}
 
@@ -522,6 +531,9 @@ func (c *Controller) checkForMultiNadMismatch(name, namespace string) error {
 	for _, additionalNad := range nadList {
 		additionalIpamConf, err := ipamConfiguration(additionalNad, "")
 		if err != nil {
+			if config.IsIrrelevantNADError(err) {
+				continue
+			}
 			return err
 		}
 

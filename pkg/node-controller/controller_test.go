@@ -116,6 +116,27 @@ func newNad(name string, networkName string, networkRange string, sliceSize stri
 	}
 }
 
+func newNadWithoutIPAM(name, namespace string) *k8snetplumbersv1.NetworkAttachmentDefinition {
+	return &k8snetplumbersv1.NetworkAttachmentDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: k8snetplumbersv1.SchemeGroupVersion.String(),
+			Kind:       "NetworkAttachmentDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: k8snetplumbersv1.NetworkAttachmentDefinitionSpec{
+			Config: `{
+				"cniVersion": "0.3.0",
+				"name": "ovn-kubernetes",
+				"type": "bridge",
+				"bridge": "cni0"
+			}`,
+		},
+	}
+}
+
 func getOwnerRefs(nads []*k8snetplumbersv1.NetworkAttachmentDefinition) []metav1.OwnerReference {
 	if len(nads) == 1 {
 		return []metav1.OwnerReference{
@@ -970,4 +991,39 @@ func getKey(nad *k8snetplumbersv1.NetworkAttachmentDefinition, t *testing.T) str
 		return ""
 	}
 	return key
+}
+
+// TestCreatesNodeSlicePoolIgnoresNonWhereaboutsNAD ensures cluster-wide NADs without
+// whereabouts IPAM (e.g. openshift-ovn-kubernetes/default) do not block NodeSlicePool creation.
+func TestCreatesNodeSlicePoolIgnoresNonWhereaboutsNAD(t *testing.T) {
+	f := newFixture(t)
+	nad := newNad("wb-ipam", "wb-ipam", "10.0.0.0/8", "/10")
+	ovnDefaultNAD := newNadWithoutIPAM("default", "openshift-ovn-kubernetes")
+	nodeSlicePool := newNodeSlicePool("wb-ipam", "10.0.0.0/8", "/10",
+		v1alpha1.NodeSlicePoolStatus{
+			Allocations: []v1alpha1.NodeSliceAllocation{
+				{
+					NodeName:   "",
+					SliceRange: "10.0.0.0/10",
+				},
+				{
+					NodeName:   "",
+					SliceRange: "10.64.0.0/10",
+				},
+				{
+					NodeName:   "",
+					SliceRange: "10.128.0.0/10",
+				},
+				{
+					NodeName:   "",
+					SliceRange: "10.192.0.0/10",
+				},
+			},
+		}, nad)
+
+	f.nadLister = append(f.nadLister, nad, ovnDefaultNAD)
+	f.nadObjects = append(f.nadObjects, nad, ovnDefaultNAD)
+	f.expectNodeSlicePoolCreateAction(nodeSlicePool)
+
+	f.run(context.TODO(), getKey(nad, t))
 }

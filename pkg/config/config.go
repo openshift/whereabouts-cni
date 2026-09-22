@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,7 +42,7 @@ func LoadIPAMConfig(bytes []byte, envArgs string, extraConfigPaths ...string) (*
 	}
 
 	if n.IPAM == nil {
-		return nil, "", fmt.Errorf("IPAM config missing 'ipam' key")
+		return nil, "", NewMissingIPAMError()
 	} else if !isNetworkRelevant(n.IPAM) {
 		return nil, "", NewInvalidPluginError(n.IPAM.Type)
 	}
@@ -369,6 +370,33 @@ func NewInvalidPluginError(ipamType string) *InvalidPluginError {
 
 func (e *InvalidPluginError) Error() string {
 	return fmt.Sprintf("only interested in networks whose IPAM type is 'whereabouts'. This one was: %s", e.ipamType)
+}
+
+// MissingIPAMError is returned when a CNI config has no ipam section.
+type MissingIPAMError struct{}
+
+func NewMissingIPAMError() *MissingIPAMError {
+	return &MissingIPAMError{}
+}
+
+func (e *MissingIPAMError) Error() string {
+	return "IPAM config missing 'ipam' key"
+}
+
+// IsIrrelevantNADError reports whether a NAD is not a whereabouts IPAM network.
+func IsIrrelevantNADError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var invalidPlugin *InvalidPluginError
+	if errors.As(err, &invalidPlugin) {
+		return true
+	}
+	var missingIPAM *MissingIPAMError
+	if errors.As(err, &missingIPAM) {
+		return true
+	}
+	return false
 }
 
 type ConfigFileNotFoundError struct{}
