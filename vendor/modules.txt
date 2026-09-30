@@ -174,7 +174,7 @@ go.uber.org/atomic
 golang.org/x/mod/internal/lazyregexp
 golang.org/x/mod/module
 golang.org/x/mod/semver
-# golang.org/x/net v0.25.0 => github.com/openshift-sustaining/net v0.35.0-sec.3
+# golang.org/x/net v0.25.0 => github.com/openshift-sustaining/net v0.35.0-sec.4
 ## explicit; go 1.18
 golang.org/x/net/context
 golang.org/x/net/context/ctxhttp
@@ -764,4 +764,4 @@ sigs.k8s.io/structured-merge-diff/v4/value
 ## explicit; go 1.12
 sigs.k8s.io/yaml
 # github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
-# golang.org/x/net => github.com/openshift-sustaining/net v0.35.0-sec.3
+# golang.org/x/net => github.com/openshift-sustaining/net v0.35.0-sec.4
