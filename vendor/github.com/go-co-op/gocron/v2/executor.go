@@ -27,7 +27,7 @@ type executor struct {
 	// sends out jobs for rescheduling
 	jobsOutForRescheduling chan uuid.UUID
 	// sends out jobs once completed
-	jobsOutCompleted chan uuid.UUID
+	jobsOutCompleted chan jobOutCompleted
 	// used to request jobs from the scheduler
 	jobOutRequest chan *jobOutRequest
 
@@ -58,6 +58,25 @@ type executor struct {
 	monitorStatus MonitorStatus
 	// reference to parent scheduler for lifecycle notifications
 	scheduler *scheduler
+	// channel to send job timing updates back to the scheduler
+	jobTimingUpdateCh chan jobTimingUpdate
+}
+
+type jobTimingUpdate struct {
+	id          uuid.UUID
+	startedAt   time.Time
+	completedAt time.Time
+}
+
+// jobOutCompleted signals that a scheduled invocation of a job has
+// reached its completion point in the executor. skipped is true when
+// the run was aborted before the task function ran (for example, by
+// BeforeJobRunsSkipIfBeforeFuncErrors); the scheduler uses this to
+// avoid consuming a WithLimitedRuns slot for a run that never
+// actually executed.
+type jobOutCompleted struct {
+	id      uuid.UUID
+	skipped bool
 }
 
 type jobIn struct {
@@ -94,7 +113,7 @@ func (e *executor) start() {
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	e.stopOnce = &sync.Once{}
 
-	// the standardJobsWg tracks
+	// standardJobsWg tracks the standard (non-singleton, non-limit-mode) jobs in flight.
 	standardJobsWg := &waitGroupWithMutex{}
 
 	singletonJobsWg := &waitGroupWithMutex{}
@@ -104,7 +123,7 @@ func (e *executor) start() {
 	// create a fresh map for tracking singleton runners
 	e.singletonRunners = &sync.Map{}
 
-	// start the for leap that is the executor
+	// start the for-loop that is the executor
 	// selecting on channels for work to do
 	for {
 		select {
@@ -137,9 +156,9 @@ func (e *executor) start() {
 			// spin off into a goroutine to unblock the executor and
 			// allow for processing for more work
 			go func(executorCtx context.Context) {
-				// make sure to cancel the above context per the docs
-				// // Canceling this context releases resources associated with it, so code should
-				// // call cancel as soon as the operations running in this Context complete.
+				// make sure to cancel the above context per the docs:
+				// Canceling this context releases resources associated with it, so code should
+				// call cancel as soon as the operations running in this Context complete.
 				defer cancel()
 
 				// check for limit mode - this spins up a separate runner which handles
@@ -194,7 +213,7 @@ func (e *executor) start() {
 						runner := &singletonRunner{}
 						runnerSrc, ok := e.singletonRunners.Load(jIn.id)
 						if !ok {
-							runner.in = make(chan jobIn, 1000)
+							runner.in = make(chan jobIn, defaultSingletonQueueBuffer)
 							if j.singletonLimitMode == LimitModeReschedule {
 								runner.rescheduleLimiter = make(chan struct{}, 1)
 							}
@@ -281,6 +300,18 @@ func (e *executor) sendOutForNextRunUpdate(jIn *jobIn) {
 	}
 }
 
+// limitModeRunner is the worker goroutine spawned per limit-mode slot
+// under WithLimitConcurrentJobs. Multiple runners share the same `in`
+// channel (the limit-mode queue in scheduler.exec.limitMode), so the
+// number of runners bounds concurrent execution across ALL jobs.
+//
+// Behavior by mode:
+//   - LimitModeReschedule: a full queue causes the send in selectStart
+//     to non-block via rescheduleLimiter (cap == limit); overflow runs
+//     are dropped and the job is rescheduled at its next tick.
+//   - LimitModeWait: sends block on the queue, so callers wait for a
+//     slot rather than being dropped. See the LimitModeWait doc
+//     warning about queue growth.
 func (e *executor) limitModeRunner(name string, in chan jobIn, wg *waitGroupWithMutex, limitMode LimitMode, rescheduleLimiter chan struct{}) {
 	e.logger.Debug("gocron: limitModeRunner starting", "name", name)
 	for {
@@ -346,6 +377,14 @@ func (e *executor) limitModeRunner(name string, in chan jobIn, wg *waitGroupWith
 	}
 }
 
+// singletonModeRunner is the worker goroutine spawned per job that has
+// WithSingletonMode set. Unlike limitModeRunner, `in` is unique per
+// job (owned by e.singletonRunners[jobID]), so the runner serializes
+// runs of that ONE job while other jobs run freely.
+//
+// LimitModeReschedule drops overlapping ticks (job still executing);
+// LimitModeWait queues them up to the channel's buffer
+// (defaultSingletonQueueBuffer, see scheduler.go).
 func (e *executor) singletonModeRunner(name string, in chan jobIn, wg *waitGroupWithMutex, limitMode LimitMode, rescheduleLimiter chan struct{}) {
 	e.logger.Debug("gocron: singletonModeRunner starting", "name", name)
 	for {
@@ -410,6 +449,11 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 	} else if !j.disabledLocker && j.locker != nil {
 		lock, err := j.locker.Lock(j.ctx, j.name)
 		if err != nil {
+			// Event-listener signatures are enforced by the typed JobOption
+			// factories (AfterLockError, BeforeJobRuns, etc.), so
+			// callJobFuncWithParams cannot return ErrJobParameterMismatch here
+			// in practice. We discard the error to keep listener execution
+			// best-effort. This applies to every listener call in this file.
 			_ = callJobFuncWithParams(j.afterLockError, j.id, j.name, err)
 			e.sendOutForRescheduling(&jIn)
 			e.incrementJobCounter(j, Skip)
@@ -446,7 +490,7 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 	if err != nil {
 		e.sendOutForRescheduling(&jIn)
 		select {
-		case e.jobsOutCompleted <- j.id:
+		case e.jobsOutCompleted <- jobOutCompleted{id: j.id, skipped: true}:
 		case <-e.ctx.Done():
 		}
 		// Notify job failed (before actual run)
@@ -466,12 +510,16 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 	if !j.intervalFromCompletion {
 		e.sendOutForRescheduling(&jIn)
 		select {
-		case e.jobsOutCompleted <- j.id:
+		case e.jobsOutCompleted <- jobOutCompleted{id: j.id}:
 		case <-e.ctx.Done():
 		}
 	}
 
 	startTime := time.Now()
+	select {
+	case e.jobTimingUpdateCh <- jobTimingUpdate{id: j.id, startedAt: startTime}:
+	case <-e.ctx.Done():
+	}
 	if j.afterJobRunsWithPanic != nil {
 		err = e.callJobWithRecover(j)
 	} else {
@@ -483,6 +531,10 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 		e.incrementJobCounter(j, Fail)
 		endTime := time.Now()
 		e.recordJobTimingWithStatus(startTime, endTime, j, Fail, err)
+		select {
+		case e.jobTimingUpdateCh <- jobTimingUpdate{id: j.id, completedAt: endTime}:
+		case <-e.ctx.Done():
+		}
 		// Notify job failed
 		if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
 			jobObj := e.scheduler.jobFromInternalJob(j)
@@ -494,6 +546,10 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 		e.incrementJobCounter(j, Success)
 		endTime := time.Now()
 		e.recordJobTimingWithStatus(startTime, endTime, j, Success, nil)
+		select {
+		case e.jobTimingUpdateCh <- jobTimingUpdate{id: j.id, completedAt: endTime}:
+		case <-e.ctx.Done():
+		}
 		// Notify job completed
 		if e.scheduler != nil && e.scheduler.schedulerMonitor != nil {
 			jobObj := e.scheduler.jobFromInternalJob(j)
@@ -505,7 +561,7 @@ func (e *executor) runJob(j internalJob, jIn jobIn) {
 	// For intervalFromCompletion, reschedule AFTER the job completes
 	if j.intervalFromCompletion {
 		select {
-		case e.jobsOutCompleted <- j.id:
+		case e.jobsOutCompleted <- jobOutCompleted{id: j.id}:
 		case <-e.ctx.Done():
 		}
 		e.sendOutForRescheduling(&jIn)
@@ -601,10 +657,12 @@ func (e *executor) stop(standardJobsWg, singletonJobsWg, limitModeJobsWg *waitGr
 		}()
 
 		// now either wait for all the jobs to complete,
-		// or hit the timeout.
+		// or hit the timeout. Uses the executor's clock so fake clocks
+		// in tests continue to work, and blocks on the select (no busy-wait).
 		var count int
-		timeout := time.Now().Add(e.stopTimeout)
-		for time.Now().Before(timeout) && count < 3 {
+		timer := e.clock.NewTimer(e.stopTimeout)
+		timedOut := false
+		for !timedOut && count < 3 {
 			select {
 			case <-waitForJobs:
 				count++
@@ -612,9 +670,11 @@ func (e *executor) stop(standardJobsWg, singletonJobsWg, limitModeJobsWg *waitGr
 				count++
 			case <-waitForLimitMode:
 				count++
-			default:
+			case <-timer.Chan():
+				timedOut = true
 			}
 		}
+		timer.Stop()
 		if count < 3 {
 			e.done <- ErrStopJobsTimedOut
 			e.logger.Debug("gocron: executor stopped - timed out")
