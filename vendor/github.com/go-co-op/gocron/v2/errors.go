@@ -19,6 +19,7 @@ var (
 	ErrDurationRandomJobMinMax       = errors.New("gocron: DurationRandomJob: minimum duration must be less than maximum duration")
 	ErrEventListenerFuncNil          = errors.New("gocron: eventListenerFunc must not be nil")
 	ErrJobNotFound                   = errors.New("gocron: job not found")
+	ErrJobParameterMismatch          = errors.New("gocron: job function called with wrong number of parameters")
 	ErrJobRunNowFailed               = errors.New("gocron: Job: RunNow: scheduler unreachable")
 	ErrMonthlyJobDays                = errors.New("gocron: MonthlyJob: daysOfTheMonth must be between 31 and -31 inclusive, and not 0")
 	ErrMonthlyJobAtTimeNil           = errors.New("gocron: MonthlyJob: atTime within atTimes must not be nil")
@@ -42,6 +43,7 @@ var (
 	ErrWeeklyJobZeroInterval         = errors.New("gocron: WeeklyJob: interval must be greater than 0")
 	ErrWeeklyJobMinutesSeconds       = errors.New("gocron: WeeklyJob: atTimes minutes and seconds must be between 0 and 59 inclusive")
 	ErrPanicRecovered                = errors.New("gocron: panic recovered")
+	ErrSchedulerBusy                 = errors.New("gocron: scheduler did not respond in time")
 	ErrWithClockNil                  = errors.New("gocron: WithClock: clock must not be nil")
 	ErrWithContextNil                = errors.New("gocron: WithContext: context must not be nil")
 	ErrWithDistributedElectorNil     = errors.New("gocron: WithDistributedElector: elector must not be nil")
@@ -60,7 +62,6 @@ var (
 	ErrStartTimeLaterThanEndTime     = errors.New("gocron: WithStartDateTime: start must not be later than end")
 	ErrStopTimeEarlierThanStartTime  = errors.New("gocron: WithStopDateTime: end must not be earlier than start")
 	ErrWithStopTimeoutZeroOrNegative = errors.New("gocron: WithStopTimeout: timeout must be greater than 0")
-	ErrWithSchedulerMonitorNil       = errors.New("gocron: WithSchedulerMonitor: scheduler monitor cannot be nil")
 	ErrWithLimitedRunsZero           = errors.New("gocron: WithLimitedRuns: limit must be greater than 0")
 )
 
