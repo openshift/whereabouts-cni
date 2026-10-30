@@ -5,7 +5,7 @@
 
 gocron is a job scheduling package which lets you run Go functions at pre-determined intervals.
 
-> Looking for a visual interface?  
+> Looking for a visual interface?
 > Check out [**gocron-ui**](https://github.com/go-co-op/gocron-ui) — a lightweight web dashboard to monitor, trigger, and manage your `gocron` jobs in real time.
 
 If you want to chat, you can find us on Slack at
@@ -63,6 +63,8 @@ func main() {
 
 	// when you're done, shut it down
 	err = s.Shutdown()
+	// or for context-aware teardown:
+	// err = s.ShutdownWithContext(ctx)
 	if err != nil {
 		// handle error
 	}
@@ -112,7 +114,7 @@ Jobs can be run at specific time(s) (either once or many times).
 ### Interval Timing
 Jobs can be scheduled with different interval timing modes.
 - [**Interval from scheduled time (default)**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#DurationJob):
-By default, jobs calculate their next run time from when they were scheduled to start, resulting in fixed intervals 
+By default, jobs calculate their next run time from when they were scheduled to start, resulting in fixed intervals
 regardless of execution time. Good for cron-like scheduling at predictable times.
 - [**Interval from completion time**](https://pkg.go.dev/github.com/go-co-op/gocron/v2#WithIntervalFromCompletion):
 Jobs can calculate their next run time from when they complete, ensuring consistent rest periods between executions.
@@ -255,15 +257,5 @@ This project is supported by:
    <source media="(prefers-color-scheme: dark)" srcset="assets/sentry-wordmark-light-280x84.png" />
    <source media="(prefers-color-scheme: light)" srcset="https://sentry-brand.storage.googleapis.com/sentry-wordmark-dark-280x84.png" />
    <img alt="Sentry logo" src="https://sentry-brand.storage.googleapis.com/sentry-wordmark-dark-280x84.png" />
- </picture>
-</a>
-
-## Star History
-
-<a href="https://www.star-history.com/#go-co-op/gocron&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=go-co-op/gocron&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=go-co-op/gocron&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=go-co-op/gocron&type=Date" />
  </picture>
 </a>
