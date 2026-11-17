@@ -41,7 +41,6 @@ func run() int {
 
 	stopChan := make(chan struct{})
 	errorChan := make(chan error, 1)
-	defer close(stopChan)
 	defer close(errorChan)
 	handleSignals(stopChan, os.Interrupt, syscall.SIGTERM)
 
@@ -70,11 +69,9 @@ func run() int {
 	}
 	s.Start()
 
-	const reconcilerConfigMntFile = "/cron-schedule/..data"
-	p := func(e fsnotify.Event) bool {
-		return e.Name == reconcilerConfigMntFile && e.Op&fsnotify.Create == fsnotify.Create
-	}
-	reconcilerConfigWatcher.SyncConfiguration(p)
+	reconcilerConfigWatcher.SyncConfiguration(
+		reconciler.ReconcilerConfigEventPredicate(reconcilerCronConfiguration),
+	)
 
 	for {
 		select {
@@ -99,6 +96,6 @@ func handleSignals(stopChannel chan struct{}, signals ...os.Signal) {
 	signal.Notify(signalChannel, signals...)
 	go func() {
 		<-signalChannel
-		stopChannel <- struct{}{}
+		close(stopChannel)
 	}()
 }

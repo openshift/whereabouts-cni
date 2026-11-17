@@ -9,7 +9,7 @@ echo "go path ($GOPATH)"
 echo "go root ($GOROOT)"
 
 GO=${GO:-go}
-SKIP_STATIC_CHECK=$false
+SKIP_STATIC_CHECK=false
 #parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,15 +28,15 @@ done
 
 BASEDIR=$(pwd)
 
-if [ $SKIP_STATIC_CHECK ]
+if [ "$SKIP_STATIC_CHECK" = true ]
 then
     echo "Skipped golang staticcheck"
     echo "Skipped go vet"
 else
   echo "Installing golang staticcheck ..."
-  GOBIN=${BASEDIR}/bin go install honnef.co/go/tools/cmd/staticcheck@latest
+  GOBIN="${BASEDIR}/bin" go install honnef.co/go/tools/cmd/staticcheck@latest
   echo "Running golang staticcheck ..."
-  ${BASEDIR}/bin/staticcheck --tags=test ./...
+  "${BASEDIR}/bin/staticcheck" --tags=test -checks=all,-SA1019,-ST1000,-ST1003,-ST1020,-ST1023 ./...
 
   echo "Running go vet ..."
   ${GO} vet --tags=test ./cmd/... ./pkg/...

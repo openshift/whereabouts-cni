@@ -243,14 +243,12 @@ func (p *KubernetesIPPool) Update(ctx context.Context, reservations []whereabout
 func toIPReservationList(allocations map[string]whereaboutsv1alpha1.IPAllocation, firstip net.IP) []whereaboutstypes.IPReservation {
 	reservelist := []whereaboutstypes.IPReservation{}
 	for offset, a := range allocations {
-		numOffset, err := strconv.ParseInt(offset, 10, 64)
+		numOffset, err := strconv.ParseUint(offset, 10, 64)
 		if err != nil {
-			// allocations that are invalid int64s should be ignored
-			// toAllocationMap should be the only writer of offsets, via `fmt.Sprintf("%d", ...)``
 			logging.Errorf("Error decoding ip offset (backend: kubernetes): %v", err)
 			continue
 		}
-		ip := iphelpers.IPAddOffset(firstip, uint64(numOffset))
+		ip := iphelpers.IPAddOffset(firstip, numOffset)
 		reservelist = append(reservelist, whereaboutstypes.IPReservation{IP: ip, ContainerID: a.ContainerID, PodRef: a.PodRef, IfName: a.IfName})
 	}
 	return reservelist
@@ -571,11 +569,12 @@ func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *Kubernete
 	var ipforoverlappingrangeupdate net.IP
 	skipOverlappingRangeUpdate := false
 	for _, ipRange := range ipamConf.IPRanges {
+		poolUpdateSucceeded := false
 	RETRYLOOP:
 		for j := 0; j < storage.DatastoreRetries; j++ {
 			select {
 			case <-ctx.Done():
-				break RETRYLOOP
+				return newips, ctx.Err()
 			default:
 				// retry the IPAM loop if the context has not been cancelled
 			}
@@ -693,7 +692,18 @@ func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *Kubernete
 				}
 				break RETRYLOOP
 			}
+			poolUpdateSucceeded = true
 			break RETRYLOOP
+		}
+
+		if err != nil {
+			return newips, err
+		}
+		if ctx.Err() != nil {
+			return newips, ctx.Err()
+		}
+		if !poolUpdateSucceeded {
+			return newips, fmt.Errorf("IPAM retries exhausted without updating the pool")
 		}
 
 		if ipamConf.OverlappingRanges {
